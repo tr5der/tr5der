@@ -1,5 +1,5 @@
-// NinjaTrader 8 strategy conversion of the Python ORB analyzer.
-// Run this strategy on a 5-minute chart for each instrument you want to evaluate.
+// NinjaTrader 8 strategy conversion of the ORB analyzer for futures.
+// Built for futures instruments such as MNQ on a 5-minute chart.
 
 #region Using declarations
 using System;
@@ -16,15 +16,8 @@ using NinjaTrader.NinjaScript.Indicators;
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
-    public class ForexOrbConfluenceStrategy : Strategy
+    public class FuturesOrbConfluenceStrategy : Strategy
     {
-        private enum PairType
-        {
-            Standard,
-            Jpy,
-            Gold
-        }
-
         private enum TradeDirection
         {
             None,
@@ -36,19 +29,19 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             public TradeDirection Direction;
             public int Score;
-            public string OrderType;
+            public string Recommendation;
             public double Entry;
             public double StopLoss;
             public double TakeProfit1;
             public double TakeProfit2;
             public double TakeProfit3;
-            public double StopLossPips;
-            public double TakeProfit1Pips;
-            public double TakeProfit2Pips;
-            public double TakeProfit3Pips;
-            public double LotSize;
+            public int StopLossTicks;
+            public int TakeProfit1Ticks;
+            public int TakeProfit2Ticks;
+            public int TakeProfit3Ticks;
+            public int Contracts;
             public double RiskAmount;
-            public double ProfitTp1Amount;
+            public double RewardTp1Target;
             public bool ShouldTrade;
             public string FactorsText;
         }
@@ -99,29 +92,54 @@ namespace NinjaTrader.NinjaScript.Strategies
         public int MinimumScoreToTrade { get; set; }
 
         [NinjaScriptProperty]
-        [Range(1, 1000000)]
-        [Display(Name = "UnitsPerLot", GroupName = "Risk", Order = 7)]
-        public int UnitsPerLot { get; set; }
+        [Range(1, 25)]
+        [Display(Name = "ContractsScore5", GroupName = "Risk", Order = 7)]
+        public int ContractsScore5 { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(1, 25)]
+        [Display(Name = "ContractsScore6", GroupName = "Risk", Order = 8)]
+        public int ContractsScore6 { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(1.0, 10000.0)]
+        [Display(Name = "RiskDollarsScore5", GroupName = "Risk", Order = 9)]
+        public double RiskDollarsScore5 { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(1.0, 10000.0)]
+        [Display(Name = "RiskDollarsScore6", GroupName = "Risk", Order = 10)]
+        public double RiskDollarsScore6 { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(1.0, 10000.0)]
+        [Display(Name = "RewardTp1DollarsScore5", GroupName = "Risk", Order = 11)]
+        public double RewardTp1DollarsScore5 { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(1.0, 10000.0)]
+        [Display(Name = "RewardTp1DollarsScore6", GroupName = "Risk", Order = 12)]
+        public double RewardTp1DollarsScore6 { get; set; }
 
         [NinjaScriptProperty]
         [Range(1, 10)]
-        [Display(Name = "MaxTradesPerSession", GroupName = "Risk", Order = 8)]
+        [Display(Name = "MaxTradesPerSession", GroupName = "Execution", Order = 13)]
         public int MaxTradesPerSession { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "AutoTrade", GroupName = "Execution", Order = 9)]
+        [Display(Name = "AutoTrade", GroupName = "Execution", Order = 14)]
         public bool AutoTrade { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "VerboseOutput", GroupName = "Execution", Order = 10)]
+        [Display(Name = "VerboseOutput", GroupName = "Execution", Order = 15)]
         public bool VerboseOutput { get; set; }
 
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
             {
-                Name = "ForexOrbConfluenceStrategy";
-                Description = "8-factor ORB strategy with dynamic lot sizing and pip-based SL/TP.";
+                Name = "FuturesOrbConfluenceStrategy";
+                Description = "8-factor ORB strategy for futures (MNQ-friendly) with contract sizing and tick-based SL/TP.";
                 Calculate = Calculate.OnBarClose;
                 EntriesPerDirection = 1;
                 EntryHandling = EntryHandling.AllEntries;
@@ -136,7 +154,16 @@ namespace NinjaTrader.NinjaScript.Strategies
                 MomentumMultiplier = 1.5;
                 VolumeRatioThreshold = 1.2;
                 MinimumScoreToTrade = 5;
-                UnitsPerLot = 100000;
+
+                // MNQ-style defaults:
+                // score >= 5 -> 1 contract, score >= 6 -> 2 contracts
+                ContractsScore5 = 1;
+                ContractsScore6 = 2;
+                RiskDollarsScore5 = 20;
+                RiskDollarsScore6 = 20;
+                RewardTp1DollarsScore5 = 10;
+                RewardTp1DollarsScore6 = 20;
+
                 MaxTradesPerSession = 1;
                 AutoTrade = false;
                 VerboseOutput = true;
@@ -159,9 +186,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 InitializeLogging();
 
                 if (BarsPeriod.BarsPeriodType != BarsPeriodType.Minute || BarsPeriod.Value != 5)
-                {
                     Print("Warning: This strategy is designed for 5-minute bars.");
-                }
             }
         }
 
@@ -170,7 +195,8 @@ namespace NinjaTrader.NinjaScript.Strategies
             if (BarsInProgress != 0)
                 return;
 
-            if (CurrentBar < BarsRequiredToTrade)
+            int minimumBars = Math.Max(BarsRequiredToTrade, Math.Max(VolumeLookback, SupportResistancePeriod) + 2);
+            if (CurrentBar < minimumBars)
                 return;
 
             UpdateOpeningRange();
@@ -192,7 +218,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     Print(string.Format(
                         "{0} {1} Score {2}/8 -> SKIP",
                         Time[0].ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-                        GetDisplayPairName(),
+                        GetDisplayInstrumentName(),
                         result.Score));
                 }
                 return;
@@ -202,9 +228,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             PrintRecommendation(result);
 
             if (AutoTrade && Position.MarketPosition == MarketPosition.Flat && tradesThisSession < MaxTradesPerSession)
-            {
                 SubmitOrder(result);
-            }
         }
 
         private void UpdateOpeningRange()
@@ -240,12 +264,10 @@ namespace NinjaTrader.NinjaScript.Strategies
         private TradeDirection GetBreakoutDirection()
         {
             double currentPrice = Close[0];
-
             if (currentPrice > openingHigh)
                 return TradeDirection.Long;
             if (currentPrice < openingLow)
                 return TradeDirection.Short;
-
             return TradeDirection.None;
         }
 
@@ -258,9 +280,11 @@ namespace NinjaTrader.NinjaScript.Strategies
             int score = 0;
             List<string> factors = new List<string>();
 
+            // FACTOR 1: breakout (already true by caller)
             score += 1;
             factors.Add("1_breakout:OK " + (direction == TradeDirection.Long ? "LONG" : "SHORT"));
 
+            // FACTOR 2: RSI
             double rsiValue = rsi14[0];
             bool rsiPass = (direction == TradeDirection.Long && rsiValue > 50.0 && rsiValue < 70.0)
                 || (direction == TradeDirection.Short && rsiValue > 30.0 && rsiValue < 50.0);
@@ -274,6 +298,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 factors.Add("2_rsi:NO RSI " + rsiValue.ToString("0.0", CultureInfo.InvariantCulture));
             }
 
+            // FACTOR 3: MACD
             double macdLine = macd.Default[0];
             double signalLine = macd.Avg[0];
             double histogram = macd.Diff[0];
@@ -289,6 +314,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 factors.Add("3_macd:NO MACD no signal");
             }
 
+            // FACTOR 4: EMA alignment
             double ema20Value = ema20[0];
             double ema50Value = ema50[0];
             bool emaPass = (direction == TradeDirection.Long && Close[0] > ema20Value && ema20Value > ema50Value)
@@ -303,6 +329,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 factors.Add("4_ema:NO EMA not aligned");
             }
 
+            // FACTOR 5: momentum
             bool momentumPass = false;
             if (CurrentBar > 0)
             {
@@ -320,6 +347,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 factors.Add("5_momentum:NO Weak candle");
             }
 
+            // FACTOR 6: elevated volume
             double volumeRatio;
             bool elevatedVolume = CheckElevatedVolume(out volumeRatio);
             if (elevatedVolume)
@@ -332,6 +360,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 factors.Add("6_volume:NO Volume " + volumeRatio.ToString("0.00", CultureInfo.InvariantCulture) + "x");
             }
 
+            // FACTOR 7: fair value gap
             bool hasFvg = CheckFairValueGap();
             if (hasFvg)
             {
@@ -343,6 +372,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 factors.Add("7_fvg:NO No FVG");
             }
 
+            // FACTOR 8: near support/resistance
             bool nearSupportResistance = CheckSupportResistance();
             if (nearSupportResistance)
             {
@@ -354,48 +384,46 @@ namespace NinjaTrader.NinjaScript.Strategies
                 factors.Add("8_sr:NO Away S/R");
             }
 
-            PairType pairType = GetPairType();
-            double lotSize = GetLotSize(pairType, score);
+            int contracts = GetContracts(score);
             double riskAmount;
-            double profitTp1;
-            GetRiskReward(pairType, score, out riskAmount, out profitTp1);
+            double rewardTp1Target;
+            GetRiskReward(score, out riskAmount, out rewardTp1Target);
 
             result.Score = score;
-            result.LotSize = lotSize;
+            result.Contracts = contracts;
             result.RiskAmount = riskAmount;
-            result.ProfitTp1Amount = profitTp1;
-            result.OrderType = direction == TradeDirection.Long ? "Buy Limit" : "Sell Limit";
-            result.ShouldTrade = score >= MinimumScoreToTrade && lotSize > 0.0;
+            result.RewardTp1Target = rewardTp1Target;
+            result.Recommendation = direction == TradeDirection.Long ? "BUY" : "SELL_SHORT";
+            result.ShouldTrade = score >= MinimumScoreToTrade && contracts > 0 && riskAmount > 0.0 && rewardTp1Target > 0.0;
             result.FactorsText = string.Join(" | ", factors.ToArray());
 
             if (!result.ShouldTrade)
             {
-                result.OrderType = "SKIP";
+                result.Recommendation = "SKIP";
                 result.StopLoss = 0.0;
                 result.TakeProfit1 = 0.0;
                 result.TakeProfit2 = 0.0;
                 result.TakeProfit3 = 0.0;
-                result.StopLossPips = 0.0;
-                result.TakeProfit1Pips = 0.0;
-                result.TakeProfit2Pips = 0.0;
-                result.TakeProfit3Pips = 0.0;
+                result.StopLossTicks = 0;
+                result.TakeProfit1Ticks = 0;
+                result.TakeProfit2Ticks = 0;
+                result.TakeProfit3Ticks = 0;
                 return result;
             }
 
             CalculateStopTargets(
                 result.Entry,
                 direction,
-                pairType,
-                lotSize,
+                contracts,
                 score,
                 out result.StopLoss,
                 out result.TakeProfit1,
                 out result.TakeProfit2,
                 out result.TakeProfit3,
-                out result.StopLossPips,
-                out result.TakeProfit1Pips,
-                out result.TakeProfit2Pips,
-                out result.TakeProfit3Pips);
+                out result.StopLossTicks,
+                out result.TakeProfit1Ticks,
+                out result.TakeProfit2Ticks,
+                out result.TakeProfit3Ticks);
 
             return result;
         }
@@ -458,121 +486,106 @@ namespace NinjaTrader.NinjaScript.Strategies
             return false;
         }
 
-        private PairType GetPairType()
-        {
-            string symbol = Instrument.MasterInstrument.Name.ToUpperInvariant();
-            string normalized = symbol.Replace("/", string.Empty).Replace(" ", string.Empty);
-
-            if (normalized.Contains("XAU") || normalized.StartsWith("GC"))
-                return PairType.Gold;
-            if (normalized.Contains("JPY"))
-                return PairType.Jpy;
-
-            return PairType.Standard;
-        }
-
-        private double GetLotSize(PairType pairType, int score)
+        private int GetContracts(int score)
         {
             if (score >= 6)
+                return ContractsScore6;
+            if (score >= 5)
+                return ContractsScore5;
+            return 0;
+        }
+
+        private void GetRiskReward(int score, out double risk, out double rewardTp1)
+        {
+            risk = 0.0;
+            rewardTp1 = 0.0;
+
+            if (score >= 6)
             {
-                if (pairType == PairType.Gold)
-                    return 1.25;
-                return 0.25;
+                risk = RiskDollarsScore6;
+                rewardTp1 = RewardTp1DollarsScore6;
+                return;
             }
 
             if (score >= 5)
             {
-                if (pairType == PairType.Gold)
-                    return 0.75;
-                return 0.15;
+                risk = RiskDollarsScore5;
+                rewardTp1 = RewardTp1DollarsScore5;
             }
-
-            return 0.0;
         }
 
-        private void GetRiskReward(PairType pairType, int score, out double risk, out double profitTp1)
+        private double GetTickValue()
         {
-            risk = 0.0;
-            profitTp1 = 0.0;
+            if (Instrument == null || Instrument.MasterInstrument == null)
+                return 0.0;
 
-            if (score < 5)
-                return;
+            double pointValue = Instrument.MasterInstrument.PointValue;
+            if (pointValue <= 0.0 || TickSize <= 0.0)
+                return 0.0;
 
-            if (pairType == PairType.Gold)
-            {
-                risk = 50.0;
-                profitTp1 = score >= 6 ? 70.0 : 50.0;
-                return;
-            }
-
-            risk = 20.0;
-            profitTp1 = score >= 6 ? 20.0 : 10.0;
-        }
-
-        private double GetPipValue(PairType pairType)
-        {
-            if (pairType == PairType.Gold)
-                return 1.0;
-
-            return 10.0;
-        }
-
-        private double GetPipMultiplier(PairType pairType)
-        {
-            if (pairType == PairType.Standard)
-                return 0.0001;
-
-            return 0.01;
+            return pointValue * TickSize;
         }
 
         private void CalculateStopTargets(
             double entryPrice,
             TradeDirection direction,
-            PairType pairType,
-            double lotSize,
+            int contracts,
             int score,
             out double sl,
             out double tp1,
             out double tp2,
             out double tp3,
-            out double slPips,
-            out double tp1Pips,
-            out double tp2Pips,
-            out double tp3Pips)
+            out int slTicks,
+            out int tp1Ticks,
+            out int tp2Ticks,
+            out int tp3Ticks)
         {
+            sl = 0.0;
+            tp1 = 0.0;
+            tp2 = 0.0;
+            tp3 = 0.0;
+            slTicks = 0;
+            tp1Ticks = 0;
+            tp2Ticks = 0;
+            tp3Ticks = 0;
+
             double riskAmount;
-            double profitTp1;
-            GetRiskReward(pairType, score, out riskAmount, out profitTp1);
+            double rewardTp1Target;
+            GetRiskReward(score, out riskAmount, out rewardTp1Target);
 
-            double pipValue = GetPipValue(pairType);
-            double pipMultiplier = GetPipMultiplier(pairType);
+            double tickValue = GetTickValue();
+            if (contracts <= 0 || tickValue <= 0.0)
+                return;
 
-            slPips = Math.Round(riskAmount / (pipValue * lotSize), 1);
-            tp1Pips = Math.Round(profitTp1 / (pipValue * lotSize), 1);
-            tp2Pips = Math.Round((profitTp1 * 2.0) / (pipValue * lotSize), 1);
-            tp3Pips = Math.Round((profitTp1 * 3.0) / (pipValue * lotSize), 1);
+            slTicks = Math.Max(1, (int)Math.Round(riskAmount / (tickValue * contracts), MidpointRounding.AwayFromZero));
+            tp1Ticks = Math.Max(1, (int)Math.Round(rewardTp1Target / (tickValue * contracts), MidpointRounding.AwayFromZero));
+            tp2Ticks = Math.Max(1, tp1Ticks * 2);
+            tp3Ticks = Math.Max(1, tp1Ticks * 3);
+
+            double slOffset = slTicks * TickSize;
+            double tp1Offset = tp1Ticks * TickSize;
+            double tp2Offset = tp2Ticks * TickSize;
+            double tp3Offset = tp3Ticks * TickSize;
 
             if (direction == TradeDirection.Long)
             {
-                sl = Instrument.MasterInstrument.RoundToTickSize(entryPrice - (slPips * pipMultiplier));
-                tp1 = Instrument.MasterInstrument.RoundToTickSize(entryPrice + (tp1Pips * pipMultiplier));
-                tp2 = Instrument.MasterInstrument.RoundToTickSize(entryPrice + (tp2Pips * pipMultiplier));
-                tp3 = Instrument.MasterInstrument.RoundToTickSize(entryPrice + (tp3Pips * pipMultiplier));
+                sl = Instrument.MasterInstrument.RoundToTickSize(entryPrice - slOffset);
+                tp1 = Instrument.MasterInstrument.RoundToTickSize(entryPrice + tp1Offset);
+                tp2 = Instrument.MasterInstrument.RoundToTickSize(entryPrice + tp2Offset);
+                tp3 = Instrument.MasterInstrument.RoundToTickSize(entryPrice + tp3Offset);
             }
             else
             {
-                sl = Instrument.MasterInstrument.RoundToTickSize(entryPrice + (slPips * pipMultiplier));
-                tp1 = Instrument.MasterInstrument.RoundToTickSize(entryPrice - (tp1Pips * pipMultiplier));
-                tp2 = Instrument.MasterInstrument.RoundToTickSize(entryPrice - (tp2Pips * pipMultiplier));
-                tp3 = Instrument.MasterInstrument.RoundToTickSize(entryPrice - (tp3Pips * pipMultiplier));
+                sl = Instrument.MasterInstrument.RoundToTickSize(entryPrice + slOffset);
+                tp1 = Instrument.MasterInstrument.RoundToTickSize(entryPrice - tp1Offset);
+                tp2 = Instrument.MasterInstrument.RoundToTickSize(entryPrice - tp2Offset);
+                tp3 = Instrument.MasterInstrument.RoundToTickSize(entryPrice - tp3Offset);
             }
         }
 
         private void SubmitOrder(AnalysisResult result)
         {
-            int quantity = (int)Math.Round(result.LotSize * UnitsPerLot, MidpointRounding.AwayFromZero);
-            if (quantity <= 0)
-                quantity = 1;
+            int quantity = Math.Max(1, result.Contracts);
 
             string signalName = string.Format(
                 "ORB_{0}_{1}",
@@ -595,31 +608,31 @@ namespace NinjaTrader.NinjaScript.Strategies
             if (!VerboseOutput)
                 return;
 
-            string pair = GetDisplayPairName();
+            string instrumentName = GetDisplayInstrumentName();
             string direction = result.Direction == TradeDirection.Long ? "LONG" : "SHORT";
             string timestamp = Time[0].ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
             Print("==================================================");
-            Print(string.Format("{0} | {1} | {2}", timestamp, pair, direction));
-            Print(string.Format("Score: {0}/8 -> TRADE ({1})", result.Score, result.OrderType));
-            Print(string.Format("Lot: {0}", result.LotSize.ToString("0.00", CultureInfo.InvariantCulture)));
-            Print(string.Format("Entry: {0}", result.Entry.ToString("0.0000", CultureInfo.InvariantCulture)));
-            Print(string.Format("SL: {0} ({1} pips, ${2} risk)",
-                result.StopLoss.ToString("0.0000", CultureInfo.InvariantCulture),
-                result.StopLossPips.ToString("0.0", CultureInfo.InvariantCulture),
-                result.RiskAmount.ToString("0", CultureInfo.InvariantCulture)));
-            Print(string.Format("TP1: {0} ({1} pips, ${2} profit)",
-                result.TakeProfit1.ToString("0.0000", CultureInfo.InvariantCulture),
-                result.TakeProfit1Pips.ToString("0.0", CultureInfo.InvariantCulture),
-                result.ProfitTp1Amount.ToString("0", CultureInfo.InvariantCulture)));
-            Print(string.Format("TP2: {0} ({1} pips, ${2} profit)",
-                result.TakeProfit2.ToString("0.0000", CultureInfo.InvariantCulture),
-                result.TakeProfit2Pips.ToString("0.0", CultureInfo.InvariantCulture),
-                (result.ProfitTp1Amount * 2.0).ToString("0", CultureInfo.InvariantCulture)));
-            Print(string.Format("TP3: {0} ({1} pips, ${2} profit)",
-                result.TakeProfit3.ToString("0.0000", CultureInfo.InvariantCulture),
-                result.TakeProfit3Pips.ToString("0.0", CultureInfo.InvariantCulture),
-                (result.ProfitTp1Amount * 3.0).ToString("0", CultureInfo.InvariantCulture)));
+            Print(string.Format("{0} | {1} | {2}", timestamp, instrumentName, direction));
+            Print(string.Format("Score: {0}/8 -> TRADE ({1})", result.Score, result.Recommendation));
+            Print(string.Format("Contracts: {0}", result.Contracts));
+            Print(string.Format("Entry: {0}", result.Entry.ToString("0.00####", CultureInfo.InvariantCulture)));
+            Print(string.Format("SL: {0} ({1} ticks, ${2} risk)",
+                result.StopLoss.ToString("0.00####", CultureInfo.InvariantCulture),
+                result.StopLossTicks.ToString(CultureInfo.InvariantCulture),
+                result.RiskAmount.ToString("0.00", CultureInfo.InvariantCulture)));
+            Print(string.Format("TP1: {0} ({1} ticks, ${2} target)",
+                result.TakeProfit1.ToString("0.00####", CultureInfo.InvariantCulture),
+                result.TakeProfit1Ticks.ToString(CultureInfo.InvariantCulture),
+                result.RewardTp1Target.ToString("0.00", CultureInfo.InvariantCulture)));
+            Print(string.Format("TP2: {0} ({1} ticks, ${2} target)",
+                result.TakeProfit2.ToString("0.00####", CultureInfo.InvariantCulture),
+                result.TakeProfit2Ticks.ToString(CultureInfo.InvariantCulture),
+                (result.RewardTp1Target * 2.0).ToString("0.00", CultureInfo.InvariantCulture)));
+            Print(string.Format("TP3: {0} ({1} ticks, ${2} target)",
+                result.TakeProfit3.ToString("0.00####", CultureInfo.InvariantCulture),
+                result.TakeProfit3Ticks.ToString(CultureInfo.InvariantCulture),
+                (result.RewardTp1Target * 3.0).ToString("0.00", CultureInfo.InvariantCulture)));
             Print(string.Format("Factors: {0}", result.FactorsText));
             Print("==================================================");
         }
@@ -632,10 +645,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 if (!Directory.Exists(logDirectory))
                     Directory.CreateDirectory(logDirectory);
 
-                logFilePath = Path.Combine(logDirectory, "orb_trading_log.csv");
+                logFilePath = Path.Combine(logDirectory, "futures_orb_trading_log.csv");
                 if (!File.Exists(logFilePath))
                 {
-                    string header = "Date,Time,Pair,Direction,Score,Recommendation,Lot,Entry,SL,SL_Pips,TP1,TP1_Pips,TP2,TP2_Pips,TP3,TP3_Pips,Risk_$,Reward_TP1_$,Reward_TP2_$,RiskReward_Ratio,Factors";
+                    string header = "Date,Time,Instrument,Direction,Score,Recommendation,Contracts,Entry,SL,SL_Ticks,TP1,TP1_Ticks,TP2,TP2_Ticks,TP3,TP3_Ticks,Risk_$,Reward_TP1_$,Reward_TP2_$,RiskReward_Ratio,Factors";
                     File.WriteAllText(logFilePath, header + Environment.NewLine);
                 }
             }
@@ -652,31 +665,32 @@ namespace NinjaTrader.NinjaScript.Strategies
 
             try
             {
-                PairType pairType = GetPairType();
-                double pipValue = GetPipValue(pairType);
+                double tickValue = GetTickValue();
+                if (tickValue <= 0.0)
+                    return;
 
-                double rewardTp1Dollars = Math.Round(result.TakeProfit1Pips * pipValue * result.LotSize, 2);
-                double rewardTp2Dollars = Math.Round(result.TakeProfit2Pips * pipValue * result.LotSize, 2);
+                double rewardTp1Dollars = Math.Round(result.TakeProfit1Ticks * tickValue * result.Contracts, 2);
+                double rewardTp2Dollars = Math.Round(result.TakeProfit2Ticks * tickValue * result.Contracts, 2);
                 double rrRatio = result.RiskAmount > 0.0 ? Math.Round(rewardTp1Dollars / result.RiskAmount, 2) : 0.0;
 
                 string[] row = new string[]
                 {
                     Time[0].ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     Time[0].ToString("HH:mm:ss", CultureInfo.InvariantCulture),
-                    GetDisplayPairName(),
+                    EscapeCsv(GetDisplayInstrumentName()),
                     result.Direction == TradeDirection.Long ? "LONG" : "SHORT",
                     result.Score.ToString(CultureInfo.InvariantCulture),
-                    result.OrderType,
-                    result.LotSize.ToString("0.00", CultureInfo.InvariantCulture),
-                    result.Entry.ToString("0.0000", CultureInfo.InvariantCulture),
-                    result.StopLoss.ToString("0.0000", CultureInfo.InvariantCulture),
-                    result.StopLossPips.ToString("0.0", CultureInfo.InvariantCulture),
-                    result.TakeProfit1.ToString("0.0000", CultureInfo.InvariantCulture),
-                    result.TakeProfit1Pips.ToString("0.0", CultureInfo.InvariantCulture),
-                    result.TakeProfit2.ToString("0.0000", CultureInfo.InvariantCulture),
-                    result.TakeProfit2Pips.ToString("0.0", CultureInfo.InvariantCulture),
-                    result.TakeProfit3.ToString("0.0000", CultureInfo.InvariantCulture),
-                    result.TakeProfit3Pips.ToString("0.0", CultureInfo.InvariantCulture),
+                    result.Recommendation,
+                    result.Contracts.ToString(CultureInfo.InvariantCulture),
+                    result.Entry.ToString("0.00####", CultureInfo.InvariantCulture),
+                    result.StopLoss.ToString("0.00####", CultureInfo.InvariantCulture),
+                    result.StopLossTicks.ToString(CultureInfo.InvariantCulture),
+                    result.TakeProfit1.ToString("0.00####", CultureInfo.InvariantCulture),
+                    result.TakeProfit1Ticks.ToString(CultureInfo.InvariantCulture),
+                    result.TakeProfit2.ToString("0.00####", CultureInfo.InvariantCulture),
+                    result.TakeProfit2Ticks.ToString(CultureInfo.InvariantCulture),
+                    result.TakeProfit3.ToString("0.00####", CultureInfo.InvariantCulture),
+                    result.TakeProfit3Ticks.ToString(CultureInfo.InvariantCulture),
                     result.RiskAmount.ToString("0.00", CultureInfo.InvariantCulture),
                     rewardTp1Dollars.ToString("0.00", CultureInfo.InvariantCulture),
                     rewardTp2Dollars.ToString("0.00", CultureInfo.InvariantCulture),
@@ -696,13 +710,16 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
         }
 
-        private string GetDisplayPairName()
+        private string GetDisplayInstrumentName()
         {
-            string raw = Instrument.MasterInstrument.Name.ToUpperInvariant().Replace(" ", string.Empty);
-            string normalized = raw.Replace("/", string.Empty);
-            if (normalized.Length == 6)
-                return normalized.Substring(0, 3) + "/" + normalized.Substring(3, 3);
-            return raw;
+            if (Instrument == null)
+                return "UNKNOWN";
+
+            string fullName = Instrument.FullName;
+            if (string.IsNullOrEmpty(fullName))
+                fullName = Instrument.MasterInstrument != null ? Instrument.MasterInstrument.Name : "UNKNOWN";
+
+            return fullName;
         }
 
         private string EscapeCsv(string value)
