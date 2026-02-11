@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 strategy(
      title = "MNQ ORB 8-Factor Confluence Strategy",
      shorttitle = "MNQ ORB 8F",
@@ -176,10 +176,7 @@ if shouldTrade and entryAllowed
     tradesThisSession += 1
 
     if showScoreLabel
-        labelText = "Score: " + str.tostring(score) + "/8\n" +
-            "Contracts: " + str.tostring(contracts) + "\n" +
-            "SL: " + str.tostring(slTicks) + " ticks\n" +
-            "TP1: " + str.tostring(tp1Ticks) + " ticks"
+        labelText = str.format("Score: {0}/8\nContracts: {1}\nSL: {2} ticks\nTP1: {3} ticks", str.tostring(score), str.tostring(contracts), str.tostring(slTicks), str.tostring(tp1Ticks))
         if showFactorDetailsInLabel
             labelText += "\n" + factors
         label.new(
