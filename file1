@@ -118,7 +118,7 @@ profit_short = close > close[1] and high > ema3 and close[1] < ema3[1] and close
 // logic buy sell improvate end
 
 rsi = ta.rsi(close, 3)
-adx = ta.adx(adx_length)
+[plus_di, minus_di, adx] = ta.dmi(adx_length, adx_length)
 atr_pct = ta.atr(14) / close
 
 longStop = strategy.position_avg_price * (1 - stopPer)
@@ -603,10 +603,10 @@ if closeshort
     cnt_time_short := 0
 
 
-if strategy.position_size > 0
-    strategy.close(id='call', when=closelong and not not_close_long)
-if strategy.position_size < 0
-    strategy.close(id='put', when=closeshort)
+if strategy.position_size > 0 and closelong and not not_close_long
+    strategy.close(id='call')
+if strategy.position_size < 0 and closeshort
+    strategy.close(id='put')
 
 
 if strategy.position_size > 0
