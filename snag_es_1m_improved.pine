@@ -62,7 +62,7 @@ htfFast = request.security(syminfo.tickerid, htfTf, ta.wma(close, fastLen), look
 htfSlow = request.security(syminfo.tickerid, htfTf, ta.wma(close, slowLen), lookahead=barmerge.lookahead_off)
 
 rsi = ta.rsi(close, rsiLen)
-adx = ta.adx(adxLen)
+[_plusDI, _minusDI, adx] = ta.dmi(adxLen, adxLen)
 atr = ta.atr(atrLen)
 atrPct = atr / close * 100.0
 volMA = ta.sma(volume, volLen)
