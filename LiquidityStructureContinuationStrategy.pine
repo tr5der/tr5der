@@ -193,9 +193,9 @@ f_build_targets(entryPrice, dir, stopTicks, pdh, pdl, aHigh, aLow, lHigh, lLow, 
     else
         array.sort(filtered, order.ascending)
 
-    t1 = na
-    t2 = na
-    t3 = na
+    float t1 = na
+    float t2 = na
+    float t3 = na
     if array.size(filtered) > 0
         for i = 0 to array.size(filtered) - 1
             lvl = array.get(filtered, i)
