@@ -1,0 +1,561 @@
+//@version=5
+strategy(
+     title = "Liquidity Structure Continuation - MNQ",
+     shorttitle = "LSC MNQ",
+     overlay = true,
+     pyramiding = 0,
+     calc_on_every_tick = true,
+     calc_on_order_fills = true,
+     process_orders_on_close = false,
+     initial_capital = 50000)
+
+// ----------------------------------------------------------------------
+// Inputs
+// ----------------------------------------------------------------------
+groupLiquidity = "Liquidity Levels"
+usePDH_PDL = input.bool(true, "Use PDH/PDL", group = groupLiquidity)
+useAsiaHighLow = input.bool(true, "Use Asia High/Low", group = groupLiquidity)
+asiaSession = input.session("1900-0100", "Asia Session (CT)", group = groupLiquidity)
+useLondonHighLow = input.bool(true, "Use London High/Low", group = groupLiquidity)
+londonSession = input.session("0200-0700", "London Session (CT)", group = groupLiquidity)
+useHourlySwings = input.bool(true, "Use Hourly Swings", group = groupLiquidity)
+swingLookbackH1 = input.int(3, "Swing Lookback Bars H1", minval = 1, maxval = 20, group = groupLiquidity)
+sessionTz = input.string("America/Chicago", "Session Timezone", group = groupLiquidity)
+
+groupSweep = "Sweep"
+sweepBufferTicks = input.int(2, "Sweep Buffer Ticks", minval = 0, maxval = 20, group = groupSweep)
+sweepMaxAgeMinutes = input.int(120, "Sweep Max Age Minutes", minval = 1, maxval = 480, group = groupSweep)
+requireCloseBackInside = input.bool(true, "Require Close Back Inside", group = groupSweep)
+maxTradesPerDay = input.int(3, "Max Trades Per Day", minval = 1, maxval = 20, group = groupSweep)
+
+groupSMT = "SMT"
+enableSMT = input.bool(false, "Enable SMT Filter", group = groupSMT)
+smtSymbol = input.symbol("CME_MINI:ES1!", "SMT Instrument", group = groupSMT)
+smtLookback = input.int(30, "SMT Lookback Minutes", minval = 5, maxval = 240, group = groupSMT)
+
+groupStructure = "Structure / Confirmation"
+bosTfMinutes = input.int(5, "BOS Timeframe Minutes", minval = 1, maxval = 30, group = groupStructure)
+pivotStrength5m = input.int(3, "Pivot Strength (BOS TF)", minval = 1, maxval = 10, group = groupStructure)
+requireBOS = input.bool(true, "Require BOS", group = groupStructure)
+allowIFVGInsteadOfBOS = input.bool(true, "Allow iFVG Instead Of BOS", group = groupStructure)
+useHigherTimeframeBias = input.bool(true, "Use 1H + 4H Bias Filter", group = groupStructure)
+
+groupConfluence = "Confluence"
+useEquilibrium = input.bool(true, "Use Equilibrium (50%)", group = groupConfluence)
+eqBandTicks = input.int(4, "EQ Band Ticks", minval = 0, maxval = 40, group = groupConfluence)
+useFVG = input.bool(true, "Use FVG", group = groupConfluence)
+fvgMinSizeTicks = input.int(2, "FVG Min Size Ticks", minval = 1, maxval = 40, group = groupConfluence)
+maxConfluenceWaitBars = input.int(12, "Max Confluence Wait Bars (BOS TF)", minval = 1, maxval = 100, group = groupConfluence)
+
+groupEntry = "Entry"
+entryTriggerType = input.string("1m_BOS", "Entry Trigger Type", options = ["1m_BOS", "1m_iFVG", "RejectionCandle"], group = groupEntry)
+entryPivotStrength = input.int(2, "Entry Pivot Strength (1m)", minval = 1, maxval = 10, group = groupEntry)
+rejectionBodyRatioMin = input.float(0.6, "Rejection Body Ratio Min", minval = 0.1, maxval = 1.0, step = 0.05, group = groupEntry)
+entryOffsetTicks = input.int(1, "Entry Offset Ticks", minval = 0, maxval = 20, group = groupEntry)
+entryOrderType = input.string("Market", "Order Type", options = ["Market", "Limit"], group = groupEntry)
+
+groupRisk = "Risk"
+stopType = input.string("AbovePullbackSwing", "Stop Type", options = ["AbovePullbackSwing", "AboveSweepExtreme", "FixedTicks"], group = groupRisk)
+stopBufferTicks = input.int(2, "Stop Buffer Ticks", minval = 0, maxval = 20, group = groupRisk)
+fixedStopTicks = input.int(20, "Fixed Stop Ticks", minval = 1, maxval = 300, group = groupRisk)
+maxStopTicks = input.int(60, "Max Stop Ticks", minval = 1, maxval = 500, group = groupRisk)
+riskPerTradeDollars = input.float(250.0, "Risk Per Trade ($)", minval = 1, group = groupRisk)
+percentAccountRisk = input.float(0.0, "Percent Account Risk (%)", minval = 0, maxval = 20, step = 0.1, group = groupRisk)
+rMultipleTargets = input.float(2.0, "Base R Multiple Target", minval = 0.5, maxval = 10, step = 0.25, group = groupRisk)
+moveStopToBEAtR = input.float(2.0, "Move Stop To BE At R", minval = 0, maxval = 10, step = 0.25, group = groupRisk)
+partialAtR = input.float(2.0, "Partial At R", minval = 0, maxval = 10, step = 0.25, group = groupRisk)
+maxHoldMinutes = input.int(120, "Max Hold Minutes", minval = 0, maxval = 1440, group = groupRisk)
+
+groupTime = "Time Filters"
+tradeOnlyRTH = input.bool(false, "Trade Only RTH", group = groupTime)
+rthSession = input.session("0835-1445", "RTH Session (CT)", group = groupTime)
+
+groupDebug = "Debug"
+showLevels = input.bool(true, "Show Key Levels", group = groupDebug)
+
+// ----------------------------------------------------------------------
+// Constants / state
+// ----------------------------------------------------------------------
+STAGE_IDLE = 0
+STAGE_SWEPT = 1
+STAGE_CONFIRMED = 2
+STAGE_CONFLUENCE = 3
+
+DIR_NONE = 0
+DIR_LONG = 1
+DIR_SHORT = -1
+
+LONG_ID = "L"
+SHORT_ID = "S"
+
+tick = syminfo.mintick
+tickValue = syminfo.pointvalue * tick
+bufferPx = sweepBufferTicks * tick
+stopBufferPx = stopBufferTicks * tick
+bosTf = str.tostring(bosTfMinutes)
+
+var int setupStage = STAGE_IDLE
+var int setupDir = DIR_NONE
+var int tradesToday = 0
+var int sweepTs = na
+var float sweepLevel = na
+var float sweepExtreme = na
+var float sweepImpulseHigh = na
+var float sweepImpulseLow = na
+var int confirmTs = na
+var float impulseHigh = na
+var float impulseLow = na
+var float eqPrice = na
+var int confluenceTs = na
+var float confluenceLow = na
+var float confluenceHigh = na
+var float pullbackExtreme = na
+var bool hasBearFvgAfterConfirm = false
+var bool hasBullFvgAfterConfirm = false
+var float bearFvgLower = na
+var float bearFvgUpper = na
+var float bullFvgLower = na
+var float bullFvgUpper = na
+
+var float activeStop = na
+var float activeT1 = na
+var float activeT2 = na
+var float activeT3 = na
+var float initialRiskTicks = na
+var int entryTs = na
+var bool breakEvenMoved = false
+var bool partialTaken = false
+
+var float asiaHigh = na
+var float asiaLow = na
+var float londonHigh = na
+var float londonLow = na
+
+// ----------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------
+f_reset_setup() =>
+    setupStage := STAGE_IDLE
+    setupDir := DIR_NONE
+    sweepTs := na
+    sweepLevel := na
+    sweepExtreme := na
+    sweepImpulseHigh := na
+    sweepImpulseLow := na
+    confirmTs := na
+    impulseHigh := na
+    impulseLow := na
+    eqPrice := na
+    confluenceTs := na
+    confluenceLow := na
+    confluenceHigh := na
+    pullbackExtreme := na
+    hasBearFvgAfterConfirm := false
+    hasBullFvgAfterConfirm := false
+    bearFvgLower := na
+    bearFvgUpper := na
+    bullFvgLower := na
+    bullFvgUpper := na
+
+f_reset_trade_management() =>
+    activeStop := na
+    activeT1 := na
+    activeT2 := na
+    activeT3 := na
+    initialRiskTicks := na
+    entryTs := na
+    breakEvenMoved := false
+    partialTaken := false
+
+f_in_session(sess) =>
+    not na(time(timeframe.period, sess, sessionTz))
+
+f_sweep_high(level) =>
+    not na(level) and high >= level + bufferPx and (not requireCloseBackInside or close < level)
+
+f_sweep_low(level) =>
+    not na(level) and low <= level - bufferPx and (not requireCloseBackInside or close > level)
+
+f_passes_smt(dir) =>
+    if not enableSMT
+        true
+    else
+        secHigh = request.security(smtSymbol, timeframe.period, high, barmerge.gaps_off, barmerge.lookahead_off)
+        secLow = request.security(smtSymbol, timeframe.period, low, barmerge.gaps_off, barmerge.lookahead_off)
+        if dir == DIR_SHORT
+            primaryMadeNewHigh = high > ta.highest(high[1], smtLookback)
+            secondaryMadeNewHigh = secHigh > ta.highest(secHigh[1], smtLookback)
+            primaryMadeNewHigh and not secondaryMadeNewHigh
+        else if dir == DIR_LONG
+            primaryMadeNewLow = low < ta.lowest(low[1], smtLookback)
+            secondaryMadeNewLow = secLow < ta.lowest(secLow[1], smtLookback)
+            primaryMadeNewLow and not secondaryMadeNewLow
+        else
+            false
+
+f_build_targets(entryPrice, dir, stopTicks, pdh, pdl, aHigh, aLow, lHigh, lLow, h1High, h1Low) =>
+    arr = array.new_float()
+    if not na(pdh)
+        array.push(arr, pdh)
+    if not na(pdl)
+        array.push(arr, pdl)
+    if not na(aHigh)
+        array.push(arr, aHigh)
+    if not na(aLow)
+        array.push(arr, aLow)
+    if not na(lHigh)
+        array.push(arr, lHigh)
+    if not na(lLow)
+        array.push(arr, lLow)
+    if not na(h1High)
+        array.push(arr, h1High)
+    if not na(h1Low)
+        array.push(arr, h1Low)
+
+    filtered = array.new_float()
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            lvl = array.get(arr, i)
+            if dir == DIR_SHORT and lvl < entryPrice - tick
+                array.push(filtered, lvl)
+            if dir == DIR_LONG and lvl > entryPrice + tick
+                array.push(filtered, lvl)
+
+    if dir == DIR_SHORT
+        array.sort(filtered, order.descending)
+    else
+        array.sort(filtered, order.ascending)
+
+    t1 = na
+    t2 = na
+    t3 = na
+    if array.size(filtered) > 0
+        for i = 0 to array.size(filtered) - 1
+            lvl = array.get(filtered, i)
+            if na(t1)
+                t1 := lvl
+            else if na(t2) and math.abs(lvl - t1) > tick
+                t2 := lvl
+            else if na(t3) and math.abs(lvl - t2) > tick
+                t3 := lvl
+
+    if na(t1)
+        t1 := entryPrice + dir * stopTicks * tick * rMultipleTargets
+    if na(t2)
+        t2 := entryPrice + dir * stopTicks * tick * (rMultipleTargets + 1.0)
+    if na(t3)
+        t3 := entryPrice + dir * stopTicks * tick * (rMultipleTargets + 2.0)
+
+    [t1, t2, t3]
+
+// ----------------------------------------------------------------------
+// Multi-timeframe data
+// ----------------------------------------------------------------------
+pdh = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+close1h = request.security(syminfo.tickerid, "60", close, barmerge.gaps_off, barmerge.lookahead_off)
+close4h = request.security(syminfo.tickerid, "240", close, barmerge.gaps_off, barmerge.lookahead_off)
+biasDir = close1h > close1h[1] and close4h > close4h[1] ? DIR_LONG : close1h < close1h[1] and close4h < close4h[1] ? DIR_SHORT : DIR_NONE
+
+h1SwingHigh = request.security(
+     syminfo.tickerid, "60",
+     ta.valuewhen(not na(ta.pivothigh(high, swingLookbackH1, swingLookbackH1)), ta.pivothigh(high, swingLookbackH1, swingLookbackH1), 0),
+     barmerge.gaps_off, barmerge.lookahead_off)
+h1SwingLow = request.security(
+     syminfo.tickerid, "60",
+     ta.valuewhen(not na(ta.pivotlow(low, swingLookbackH1, swingLookbackH1)), ta.pivotlow(low, swingLookbackH1, swingLookbackH1), 0),
+     barmerge.gaps_off, barmerge.lookahead_off)
+
+bosClose = request.security(syminfo.tickerid, bosTf, close, barmerge.gaps_off, barmerge.lookahead_off)
+bosHigh = request.security(syminfo.tickerid, bosTf, high, barmerge.gaps_off, barmerge.lookahead_off)
+bosLow = request.security(syminfo.tickerid, bosTf, low, barmerge.gaps_off, barmerge.lookahead_off)
+bosBarTime = request.security(syminfo.tickerid, bosTf, time, barmerge.gaps_off, barmerge.lookahead_off)
+isNewBosBar = ta.change(bosBarTime) != 0
+
+lastSwingHighBos = request.security(
+     syminfo.tickerid, bosTf,
+     ta.valuewhen(not na(ta.pivothigh(high, pivotStrength5m, pivotStrength5m)), ta.pivothigh(high, pivotStrength5m, pivotStrength5m), 0),
+     barmerge.gaps_off, barmerge.lookahead_off)
+lastSwingLowBos = request.security(
+     syminfo.tickerid, bosTf,
+     ta.valuewhen(not na(ta.pivotlow(low, pivotStrength5m, pivotStrength5m)), ta.pivotlow(low, pivotStrength5m, pivotStrength5m), 0),
+     barmerge.gaps_off, barmerge.lookahead_off)
+
+bearFvgLowerNow = request.security(
+     syminfo.tickerid, bosTf,
+     low[2] > high and ((low[2] - high) / syminfo.mintick) >= fvgMinSizeTicks ? high : na,
+     barmerge.gaps_off, barmerge.lookahead_off)
+bearFvgUpperNow = request.security(
+     syminfo.tickerid, bosTf,
+     low[2] > high and ((low[2] - high) / syminfo.mintick) >= fvgMinSizeTicks ? low[2] : na,
+     barmerge.gaps_off, barmerge.lookahead_off)
+bullFvgLowerNow = request.security(
+     syminfo.tickerid, bosTf,
+     high[2] < low and ((low - high[2]) / syminfo.mintick) >= fvgMinSizeTicks ? high[2] : na,
+     barmerge.gaps_off, barmerge.lookahead_off)
+bullFvgUpperNow = request.security(
+     syminfo.tickerid, bosTf,
+     high[2] < low and ((low - high[2]) / syminfo.mintick) >= fvgMinSizeTicks ? low : na,
+     barmerge.gaps_off, barmerge.lookahead_off)
+
+isBearFvgBos = isNewBosBar and not na(bearFvgLowerNow) and not na(bearFvgUpperNow)
+isBullFvgBos = isNewBosBar and not na(bullFvgLowerNow) and not na(bullFvgUpperNow)
+
+pivotHigh1m = ta.pivothigh(high, entryPivotStrength, entryPivotStrength)
+pivotLow1m = ta.pivotlow(low, entryPivotStrength, entryPivotStrength)
+lastSwingHigh1m = ta.valuewhen(not na(pivotHigh1m), pivotHigh1m, 0)
+lastSwingLow1m = ta.valuewhen(not na(pivotLow1m), pivotLow1m, 0)
+
+bearIFvg1m = low[2] > high and ((low[2] - high) / tick) >= fvgMinSizeTicks
+bullIFvg1m = high[2] < low and ((low - high[2]) / tick) >= fvgMinSizeTicks
+
+// ----------------------------------------------------------------------
+// Session tracking / day reset
+// ----------------------------------------------------------------------
+newDay = ta.change(time("D")) != 0
+if newDay
+    tradesToday := 0
+    asiaHigh := na
+    asiaLow := na
+    londonHigh := na
+    londonLow := na
+    if strategy.position_size == 0
+        f_reset_setup()
+
+if useAsiaHighLow and f_in_session(asiaSession)
+    asiaHigh := na(asiaHigh) ? high : math.max(asiaHigh, high)
+    asiaLow := na(asiaLow) ? low : math.min(asiaLow, low)
+
+if useLondonHighLow and f_in_session(londonSession)
+    londonHigh := na(londonHigh) ? high : math.max(londonHigh, high)
+    londonLow := na(londonLow) ? low : math.min(londonLow, low)
+
+canTradeByTime = not tradeOnlyRTH or f_in_session(rthSession)
+
+// ----------------------------------------------------------------------
+// Setup detection and progression
+// ----------------------------------------------------------------------
+if strategy.position_size == 0 and setupStage == STAGE_IDLE and canTradeByTime and tradesToday < maxTradesPerDay
+    float selectedLevel = na
+    int selectedDir = DIR_NONE
+
+    if usePDH_PDL and f_sweep_high(pdh)
+        selectedDir := DIR_SHORT
+        selectedLevel := pdh
+    else if useAsiaHighLow and f_sweep_high(asiaHigh)
+        selectedDir := DIR_SHORT
+        selectedLevel := asiaHigh
+    else if useLondonHighLow and f_sweep_high(londonHigh)
+        selectedDir := DIR_SHORT
+        selectedLevel := londonHigh
+    else if useHourlySwings and f_sweep_high(h1SwingHigh)
+        selectedDir := DIR_SHORT
+        selectedLevel := h1SwingHigh
+    else if usePDH_PDL and f_sweep_low(pdl)
+        selectedDir := DIR_LONG
+        selectedLevel := pdl
+    else if useAsiaHighLow and f_sweep_low(asiaLow)
+        selectedDir := DIR_LONG
+        selectedLevel := asiaLow
+    else if useLondonHighLow and f_sweep_low(londonLow)
+        selectedDir := DIR_LONG
+        selectedLevel := londonLow
+    else if useHourlySwings and f_sweep_low(h1SwingLow)
+        selectedDir := DIR_LONG
+        selectedLevel := h1SwingLow
+
+    biasPass = not useHigherTimeframeBias or biasDir == DIR_NONE or selectedDir == biasDir
+    smtPass = f_passes_smt(selectedDir)
+
+    if selectedDir != DIR_NONE and biasPass and smtPass
+        setupStage := STAGE_SWEPT
+        setupDir := selectedDir
+        sweepTs := time
+        sweepLevel := selectedLevel
+        sweepExtreme := selectedDir == DIR_SHORT ? high : low
+        sweepImpulseHigh := high
+        sweepImpulseLow := low
+        hasBearFvgAfterConfirm := false
+        hasBullFvgAfterConfirm := false
+
+if setupStage == STAGE_SWEPT
+    setupAgeMins = (time - sweepTs) / 60000.0
+    if setupAgeMins > sweepMaxAgeMinutes
+        f_reset_setup()
+    else
+        sweepImpulseHigh := math.max(sweepImpulseHigh, high)
+        sweepImpulseLow := math.min(sweepImpulseLow, low)
+
+        if isNewBosBar
+            bosConfirmed = setupDir == DIR_SHORT ? (not na(lastSwingLowBos) and bosClose < lastSwingLowBos) : setupDir == DIR_LONG ? (not na(lastSwingHighBos) and bosClose > lastSwingHighBos) : false
+            ifvgConfirmed = setupDir == DIR_SHORT ? isBearFvgBos : setupDir == DIR_LONG ? isBullFvgBos : false
+
+            confirmed = requireBOS and not allowIFVGInsteadOfBOS ? bosConfirmed :
+                 requireBOS and allowIFVGInsteadOfBOS ? (bosConfirmed or ifvgConfirmed) :
+                 not requireBOS and allowIFVGInsteadOfBOS ? ifvgConfirmed : bosConfirmed
+
+            if confirmed
+                setupStage := STAGE_CONFIRMED
+                confirmTs := time
+                impulseHigh := sweepImpulseHigh
+                impulseLow := sweepImpulseLow
+                eqPrice := (impulseHigh + impulseLow) * 0.5
+
+if setupStage == STAGE_CONFIRMED and isNewBosBar
+    confirmAgeMins = (time - confirmTs) / 60000.0
+    if confirmAgeMins > maxConfluenceWaitBars * bosTfMinutes
+        f_reset_setup()
+    else
+        if setupDir == DIR_SHORT and isBearFvgBos
+            hasBearFvgAfterConfirm := true
+            bearFvgLower := bearFvgLowerNow
+            bearFvgUpper := bearFvgUpperNow
+        if setupDir == DIR_LONG and isBullFvgBos
+            hasBullFvgAfterConfirm := true
+            bullFvgLower := bullFvgLowerNow
+            bullFvgUpper := bullFvgUpperNow
+
+        eqLower = eqPrice - eqBandTicks * tick
+        eqUpper = eqPrice + eqBandTicks * tick
+        touchedEq = useEquilibrium and bosHigh >= eqLower and bosLow <= eqUpper
+        touchedFvg = useFVG and ((setupDir == DIR_SHORT and hasBearFvgAfterConfirm and bosHigh >= bearFvgLower and bosLow <= bearFvgUpper) or (setupDir == DIR_LONG and hasBullFvgAfterConfirm and bosHigh >= bullFvgLower and bosLow <= bullFvgUpper))
+
+        if touchedEq or touchedFvg
+            setupStage := STAGE_CONFLUENCE
+            confluenceTs := time
+            if touchedEq and touchedFvg
+                fvgLow = setupDir == DIR_SHORT ? bearFvgLower : bullFvgLower
+                fvgHigh = setupDir == DIR_SHORT ? bearFvgUpper : bullFvgUpper
+                confluenceLow := math.min(eqLower, fvgLow)
+                confluenceHigh := math.max(eqUpper, fvgHigh)
+            else if touchedEq
+                confluenceLow := eqLower
+                confluenceHigh := eqUpper
+            else
+                confluenceLow := setupDir == DIR_SHORT ? bearFvgLower : bullFvgLower
+                confluenceHigh := setupDir == DIR_SHORT ? bearFvgUpper : bullFvgUpper
+
+            pullbackExtreme := setupDir == DIR_SHORT ? high : low
+
+if setupStage == STAGE_CONFLUENCE
+    confAgeMins = (time - confluenceTs) / 60000.0
+    if confAgeMins > maxConfluenceWaitBars * bosTfMinutes
+        f_reset_setup()
+    else
+        pullbackExtreme := setupDir == DIR_SHORT ? math.max(pullbackExtreme, high) : math.min(pullbackExtreme, low)
+
+        touchedConfluenceNow = high >= confluenceLow and low <= confluenceHigh
+        candleRange = high - low
+        candleBody = math.abs(close - open)
+        bodyRatio = candleRange > 0 ? candleBody / candleRange : 0.0
+
+        entryTrigger = entryTriggerType == "1m_BOS" ? (setupDir == DIR_SHORT ? (not na(lastSwingLow1m) and close < lastSwingLow1m) : (not na(lastSwingHigh1m) and close > lastSwingHigh1m)) :
+             entryTriggerType == "1m_iFVG" ? (setupDir == DIR_SHORT ? bearIFvg1m : bullIFvg1m) :
+             (touchedConfluenceNow and bodyRatio >= rejectionBodyRatioMin and (setupDir == DIR_SHORT ? close < open : close > open))
+
+        if strategy.position_size == 0 and entryTrigger and canTradeByTime
+            entryPrice = entryOrderType == "Limit" ? (setupDir == DIR_SHORT ? close + entryOffsetTicks * tick : close - entryOffsetTicks * tick) : close
+
+            stopPrice = setupDir == DIR_SHORT ?
+                 (stopType == "AbovePullbackSwing" ? pullbackExtreme + stopBufferPx : stopType == "AboveSweepExtreme" ? sweepExtreme + stopBufferPx : entryPrice + fixedStopTicks * tick) :
+                 (stopType == "AbovePullbackSwing" ? pullbackExtreme - stopBufferPx : stopType == "AboveSweepExtreme" ? sweepExtreme - stopBufferPx : entryPrice - fixedStopTicks * tick)
+
+            stopPrice := setupDir == DIR_SHORT and stopPrice <= entryPrice ? entryPrice + tick : setupDir == DIR_LONG and stopPrice >= entryPrice ? entryPrice - tick : stopPrice
+            stopTicks = math.abs(stopPrice - entryPrice) / tick
+
+            riskDollars = percentAccountRisk > 0 ? strategy.equity * (percentAccountRisk / 100.0) : riskPerTradeDollars
+            riskPerContract = stopTicks * tickValue
+            qty = riskPerContract > 0 ? math.floor(riskDollars / riskPerContract) : 0
+
+            if stopTicks <= maxStopTicks and stopTicks >= 1 and qty >= 1
+                [t1, t2, t3] = f_build_targets(entryPrice, setupDir, stopTicks, pdh, pdl, asiaHigh, asiaLow, londonHigh, londonLow, h1SwingHigh, h1SwingLow)
+
+                activeStop := stopPrice
+                activeT1 := t1
+                activeT2 := t2
+                activeT3 := t3
+                initialRiskTicks := stopTicks
+                entryTs := time
+                breakEvenMoved := false
+                partialTaken := false
+
+                if setupDir == DIR_LONG
+                    if entryOrderType == "Market"
+                        strategy.entry(LONG_ID, strategy.long, qty = qty)
+                    else
+                        strategy.entry(LONG_ID, strategy.long, qty = qty, limit = entryPrice)
+                else
+                    if entryOrderType == "Market"
+                        strategy.entry(SHORT_ID, strategy.short, qty = qty)
+                    else
+                        strategy.entry(SHORT_ID, strategy.short, qty = qty, limit = entryPrice)
+
+                tradesToday += 1
+                f_reset_setup()
+
+// ----------------------------------------------------------------------
+// Position management (active exits, BE, partial, max hold)
+// ----------------------------------------------------------------------
+newPosition = strategy.position_size != 0 and strategy.position_size[1] == 0
+flatNow = strategy.position_size == 0 and strategy.position_size[1] != 0
+
+if flatNow
+    f_reset_trade_management()
+
+if newPosition
+    entryTs := time
+
+if strategy.position_size > 0
+    riskDistance = math.abs(strategy.position_avg_price - activeStop)
+    progressR = riskDistance > 0 ? (close - strategy.position_avg_price) / riskDistance : 0.0
+
+    if not breakEvenMoved and moveStopToBEAtR > 0 and progressR >= moveStopToBEAtR
+        activeStop := strategy.position_avg_price
+        breakEvenMoved := true
+
+    if not partialTaken and partialAtR > 0 and progressR >= partialAtR
+        strategy.close(LONG_ID, qty_percent = 50, comment = "PartialAtR")
+        partialTaken := true
+
+    if maxHoldMinutes > 0 and not na(entryTs) and (time - entryTs) / 60000.0 >= maxHoldMinutes
+        strategy.close(LONG_ID, comment = "MaxHold")
+
+    strategy.exit("L-TP1", from_entry = LONG_ID, stop = activeStop, limit = activeT1, qty_percent = 50)
+    strategy.exit("L-TP2", from_entry = LONG_ID, stop = activeStop, limit = activeT2, qty_percent = 30)
+    strategy.exit("L-TP3", from_entry = LONG_ID, stop = activeStop, limit = activeT3, qty_percent = 20)
+
+if strategy.position_size < 0
+    riskDistance = math.abs(strategy.position_avg_price - activeStop)
+    progressR = riskDistance > 0 ? (strategy.position_avg_price - close) / riskDistance : 0.0
+
+    if not breakEvenMoved and moveStopToBEAtR > 0 and progressR >= moveStopToBEAtR
+        activeStop := strategy.position_avg_price
+        breakEvenMoved := true
+
+    if not partialTaken and partialAtR > 0 and progressR >= partialAtR
+        strategy.close(SHORT_ID, qty_percent = 50, comment = "PartialAtR")
+        partialTaken := true
+
+    if maxHoldMinutes > 0 and not na(entryTs) and (time - entryTs) / 60000.0 >= maxHoldMinutes
+        strategy.close(SHORT_ID, comment = "MaxHold")
+
+    strategy.exit("S-TP1", from_entry = SHORT_ID, stop = activeStop, limit = activeT1, qty_percent = 50)
+    strategy.exit("S-TP2", from_entry = SHORT_ID, stop = activeStop, limit = activeT2, qty_percent = 30)
+    strategy.exit("S-TP3", from_entry = SHORT_ID, stop = activeStop, limit = activeT3, qty_percent = 20)
+
+// ----------------------------------------------------------------------
+// Visuals
+// ----------------------------------------------------------------------
+plot(showLevels and usePDH_PDL ? pdh : na, title = "PDH", color = color.new(color.red, 0), linewidth = 1, style = plot.style_linebr)
+plot(showLevels and usePDH_PDL ? pdl : na, title = "PDL", color = color.new(color.green, 0), linewidth = 1, style = plot.style_linebr)
+plot(showLevels and useAsiaHighLow ? asiaHigh : na, title = "Asia High", color = color.new(color.orange, 0), linewidth = 1, style = plot.style_linebr)
+plot(showLevels and useAsiaHighLow ? asiaLow : na, title = "Asia Low", color = color.new(color.orange, 0), linewidth = 1, style = plot.style_linebr)
+plot(showLevels and useLondonHighLow ? londonHigh : na, title = "London High", color = color.new(color.yellow, 0), linewidth = 1, style = plot.style_linebr)
+plot(showLevels and useLondonHighLow ? londonLow : na, title = "London Low", color = color.new(color.yellow, 0), linewidth = 1, style = plot.style_linebr)
+plot(showLevels and setupStage == STAGE_CONFLUENCE ? confluenceLow : na, title = "Confluence Low", color = color.new(color.aqua, 10), linewidth = 2, style = plot.style_linebr)
+plot(showLevels and setupStage == STAGE_CONFLUENCE ? confluenceHigh : na, title = "Confluence High", color = color.new(color.aqua, 10), linewidth = 2, style = plot.style_linebr)
+
+plotchar(setupStage == STAGE_SWEPT, title = "Stage Swept", char = "S", location = location.top, color = color.new(color.white, 0), size = size.tiny)
+plotchar(setupStage == STAGE_CONFIRMED, title = "Stage Confirmed", char = "C", location = location.top, color = color.new(color.fuchsia, 0), size = size.tiny)
+plotchar(setupStage == STAGE_CONFLUENCE, title = "Stage Confluence", char = "E", location = location.top, color = color.new(color.aqua, 0), size = size.tiny)
