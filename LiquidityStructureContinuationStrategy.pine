@@ -151,12 +151,10 @@ f_sweep_high(level) =>
 f_sweep_low(level) =>
     not na(level) and low <= level - bufferPx and (not requireCloseBackInside or close > level)
 
-f_passes_smt(dir) =>
+f_passes_smt(dir, secHigh, secLow) =>
     if not enableSMT
         true
     else
-        secHigh = request.security(smtSymbol, timeframe.period, high, barmerge.gaps_off, barmerge.lookahead_off)
-        secLow = request.security(smtSymbol, timeframe.period, low, barmerge.gaps_off, barmerge.lookahead_off)
         if dir == DIR_SHORT
             primaryMadeNewHigh = high > ta.highest(high[1], smtLookback)
             secondaryMadeNewHigh = secHigh > ta.highest(secHigh[1], smtLookback)
@@ -228,6 +226,8 @@ f_build_targets(entryPrice, dir, stopTicks, pdh, pdl, aHigh, aLow, lHigh, lLow, 
 // ----------------------------------------------------------------------
 pdh = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_off)
 pdl = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_off)
+secHighSmt = request.security(smtSymbol, timeframe.period, high, barmerge.gaps_off, barmerge.lookahead_off)
+secLowSmt = request.security(smtSymbol, timeframe.period, low, barmerge.gaps_off, barmerge.lookahead_off)
 
 close1h = request.security(syminfo.tickerid, "60", close, barmerge.gaps_off, barmerge.lookahead_off)
 close4h = request.security(syminfo.tickerid, "240", close, barmerge.gaps_off, barmerge.lookahead_off)
@@ -362,7 +362,7 @@ if strategy.position_size == 0 and setupStage == STAGE_IDLE and canTradeByTime a
         selectedLevel := h1SwingLow
 
     biasPass = not useHigherTimeframeBias or biasDir == DIR_NONE or selectedDir == biasDir
-    smtPass = f_passes_smt(selectedDir)
+    smtPass = f_passes_smt(selectedDir, secHighSmt, secLowSmt)
 
     if selectedDir != DIR_NONE and biasPass and smtPass
         setupStage := STAGE_SWEPT
