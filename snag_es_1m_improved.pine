@@ -1,0 +1,200 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © binancash, improved by Cursor agent
+
+//@version=5
+strategy(
+     "Snag - ES 1m Strategy Candle Bar (Improved)",
+     overlay=true,
+     pyramiding=0,
+     process_orders_on_close=true,
+     calc_on_order_fills=true,
+     initial_capital=25000,
+     commission_type=strategy.commission.cash_per_contract,
+     commission_value=1.24
+ )
+
+//======================
+// Inputs
+//======================
+groupExec = "Execution"
+qtyContracts = input.int(1, "Contracts", minval=1, group=groupExec)
+useSessionFilter = input.bool(true, "Use Session Filter", group=groupExec)
+tradeSession = input.session("0930-1600", "Session (exchange time)", group=groupExec)
+cooldownBars = input.int(3, "Cooldown Bars Between Entries", minval=0, group=groupExec)
+maxBarsInTrade = input.int(30, "Max Bars In Trade", minval=1, group=groupExec)
+
+groupTrend = "Trend"
+fastLen = input.int(13, "Fast WMA Length", minval=1, group=groupTrend)
+slowLen = input.int(48, "Slow WMA Length", minval=2, group=groupTrend)
+biasLen = input.int(200, "Bias WMA Length", minval=10, group=groupTrend)
+htfTf = input.timeframe("5", "Higher Timeframe", group=groupTrend)
+pullbackLookback = input.int(6, "Pullback Lookback Bars", minval=1, group=groupTrend)
+supertrendFactor = input.float(2.5, "Supertrend Factor", minval=0.1, step=0.1, group=groupTrend)
+supertrendAtrLen = input.int(10, "Supertrend ATR Length", minval=1, group=groupTrend)
+
+groupFilter = "Momentum / Quality Filters"
+rsiLen = input.int(14, "RSI Length", minval=2, group=groupFilter)
+rsiLongMin = input.int(52, "Long RSI Min", minval=1, maxval=99, group=groupFilter)
+rsiLongMax = input.int(74, "Long RSI Max", minval=1, maxval=99, group=groupFilter)
+rsiShortMin = input.int(26, "Short RSI Min", minval=1, maxval=99, group=groupFilter)
+rsiShortMax = input.int(48, "Short RSI Max", minval=1, maxval=99, group=groupFilter)
+adxLen = input.int(14, "ADX Length", minval=2, group=groupFilter)
+minAdx = input.float(17.0, "Minimum ADX", minval=1.0, step=0.5, group=groupFilter)
+volLen = input.int(20, "Volume MA Length", minval=1, group=groupFilter)
+volMult = input.float(1.0, "Min Volume / Volume MA", minval=0.1, step=0.1, group=groupFilter)
+atrLen = input.int(14, "ATR Length", minval=1, group=groupFilter)
+minAtrPct = input.float(0.03, "Min ATR % of Price", minval=0.0, step=0.01, group=groupFilter)
+
+groupRisk = "Risk Management"
+stopAtrMult = input.float(1.5, "Stop Loss ATR Multiplier", minval=0.1, step=0.1, group=groupRisk)
+takeProfitRR = input.float(1.35, "Take Profit (R multiple)", minval=0.2, step=0.05, group=groupRisk)
+breakevenRR = input.float(0.85, "Move Stop to Breakeven at R", minval=0.1, step=0.05, group=groupRisk)
+trailAtrMult = input.float(1.1, "Trailing Stop ATR Multiplier", minval=0.1, step=0.1, group=groupRisk)
+
+//======================
+// Core indicators
+//======================
+wmaFast = ta.wma(close, fastLen)
+wmaSlow = ta.wma(close, slowLen)
+wmaBias = ta.wma(close, biasLen)
+
+htfFast = request.security(syminfo.tickerid, htfTf, ta.wma(close, fastLen), lookahead=barmerge.lookahead_off)
+htfSlow = request.security(syminfo.tickerid, htfTf, ta.wma(close, slowLen), lookahead=barmerge.lookahead_off)
+
+rsi = ta.rsi(close, rsiLen)
+[_plusDI, _minusDI, adx] = ta.dmi(adxLen, adxLen)
+atr = ta.atr(atrLen)
+atrPct = atr / close * 100.0
+volMA = ta.sma(volume, volLen)
+
+[supertrendValue, supertrendDir] = ta.supertrend(supertrendFactor, supertrendAtrLen)
+
+//======================
+// Filters
+//======================
+inSession = not useSessionFilter or not na(time(timeframe.period, tradeSession))
+
+bullTrend = wmaFast > wmaSlow and wmaSlow > wmaBias
+bearTrend = wmaFast < wmaSlow and wmaSlow < wmaBias
+htfBull = htfFast > htfSlow
+htfBear = htfFast < htfSlow
+superBull = supertrendDir > 0
+superBear = supertrendDir < 0
+
+rsiLongOk = rsi >= rsiLongMin and rsi <= rsiLongMax
+rsiShortOk = rsi >= rsiShortMin and rsi <= rsiShortMax
+trendStrengthOk = adx >= minAdx
+volumeOk = volume >= volMA * volMult
+volatilityOk = atrPct >= minAtrPct
+
+longPullbackBars = ta.barssince(low <= wmaFast)
+shortPullbackBars = ta.barssince(high >= wmaFast)
+recentLongPullback = not na(longPullbackBars) and longPullbackBars <= pullbackLookback
+recentShortPullback = not na(shortPullbackBars) and shortPullbackBars <= pullbackLookback
+
+triggerLong = ta.crossover(close, wmaFast)
+triggerShort = ta.crossunder(close, wmaFast)
+
+//======================
+// Entry state management
+//======================
+var int lastEntryBar = na
+var int tradeEntryBar = na
+var bool longBreakevenArmed = false
+var bool shortBreakevenArmed = false
+var float longTrailingStop = na
+var float shortTrailingStop = na
+
+newLongPos = strategy.position_size > 0 and nz(strategy.position_size[1]) <= 0
+newShortPos = strategy.position_size < 0 and nz(strategy.position_size[1]) >= 0
+
+if newLongPos
+    tradeEntryBar := bar_index
+    longBreakevenArmed := false
+    shortBreakevenArmed := false
+    longTrailingStop := na
+    shortTrailingStop := na
+
+if newShortPos
+    tradeEntryBar := bar_index
+    longBreakevenArmed := false
+    shortBreakevenArmed := false
+    longTrailingStop := na
+    shortTrailingStop := na
+
+if strategy.position_size == 0
+    tradeEntryBar := na
+    longBreakevenArmed := false
+    shortBreakevenArmed := false
+    longTrailingStop := na
+    shortTrailingStop := na
+
+canEnter = na(lastEntryBar) or (bar_index - lastEntryBar >= cooldownBars)
+
+longCondition = inSession and canEnter and strategy.position_size <= 0 and bullTrend and htfBull and superBull and trendStrengthOk and volumeOk and volatilityOk and rsiLongOk and recentLongPullback and triggerLong
+shortCondition = inSession and canEnter and strategy.position_size >= 0 and bearTrend and htfBear and superBear and trendStrengthOk and volumeOk and volatilityOk and rsiShortOk and recentShortPullback and triggerShort
+
+if longCondition
+    strategy.entry("Long", strategy.long, qty=qtyContracts)
+    lastEntryBar := bar_index
+
+if shortCondition
+    strategy.entry("Short", strategy.short, qty=qtyContracts)
+    lastEntryBar := bar_index
+
+//======================
+// Dynamic exits
+//======================
+barsInTrade = strategy.position_size != 0 and not na(tradeEntryBar) ? bar_index - tradeEntryBar : 0
+timeStop = strategy.position_size != 0 and barsInTrade >= maxBarsInTrade
+
+flipToShort = strategy.position_size > 0 and triggerShort and bearTrend and htfBear and superBear
+flipToLong = strategy.position_size < 0 and triggerLong and bullTrend and htfBull and superBull
+
+if strategy.position_size > 0
+    longBaseStop = strategy.position_avg_price - atr * stopAtrMult
+    longRisk = strategy.position_avg_price - longBaseStop
+    longArmPrice = strategy.position_avg_price + longRisk * breakevenRR
+    if high >= longArmPrice
+        longBreakevenArmed := true
+
+    longTrailCandidate = close - atr * trailAtrMult
+    longTrailingStop := na(longTrailingStop) ? longTrailCandidate : math.max(longTrailingStop, longTrailCandidate)
+
+    longStop = longBreakevenArmed ? math.max(strategy.position_avg_price, longTrailingStop) : longBaseStop
+    longTake = strategy.position_avg_price + longRisk * takeProfitRR
+    strategy.exit("L-Exit", from_entry="Long", stop=longStop, limit=longTake)
+
+if strategy.position_size < 0
+    shortBaseStop = strategy.position_avg_price + atr * stopAtrMult
+    shortRisk = shortBaseStop - strategy.position_avg_price
+    shortArmPrice = strategy.position_avg_price - shortRisk * breakevenRR
+    if low <= shortArmPrice
+        shortBreakevenArmed := true
+
+    shortTrailCandidate = close + atr * trailAtrMult
+    shortTrailingStop := na(shortTrailingStop) ? shortTrailCandidate : math.min(shortTrailingStop, shortTrailCandidate)
+
+    shortStop = shortBreakevenArmed ? math.min(strategy.position_avg_price, shortTrailingStop) : shortBaseStop
+    shortTake = strategy.position_avg_price - shortRisk * takeProfitRR
+    strategy.exit("S-Exit", from_entry="Short", stop=shortStop, limit=shortTake)
+
+if strategy.position_size > 0 and (timeStop or flipToShort)
+    strategy.close("Long")
+
+if strategy.position_size < 0 and (timeStop or flipToLong)
+    strategy.close("Short")
+
+//======================
+// Visuals
+//======================
+plot(wmaFast, "WMA Fast", color=color.new(color.blue, 0), linewidth=2)
+plot(wmaSlow, "WMA Slow", color=color.new(color.yellow, 0), linewidth=2)
+plot(wmaBias, "WMA Bias", color=color.new(color.white, 0), linewidth=2)
+plot(supertrendValue, "Supertrend", color=supertrendDir > 0 ? color.new(color.lime, 40) : color.new(color.red, 40), linewidth=1)
+
+plotshape(longCondition, title="Long Signal", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.tiny, text="L")
+plotshape(shortCondition, title="Short Signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.tiny, text="S")
+
+alertcondition(longCondition, "Long setup", "Snag improved: long setup confirmed")
+alertcondition(shortCondition, "Short setup", "Snag improved: short setup confirmed")
