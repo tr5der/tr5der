@@ -134,39 +134,6 @@ var float londonLow = na
 // ----------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------
-f_reset_setup() =>
-    setupStage := STAGE_IDLE
-    setupDir := DIR_NONE
-    sweepTs := na
-    sweepLevel := na
-    sweepExtreme := na
-    sweepImpulseHigh := na
-    sweepImpulseLow := na
-    confirmTs := na
-    impulseHigh := na
-    impulseLow := na
-    eqPrice := na
-    confluenceTs := na
-    confluenceLow := na
-    confluenceHigh := na
-    pullbackExtreme := na
-    hasBearFvgAfterConfirm := false
-    hasBullFvgAfterConfirm := false
-    bearFvgLower := na
-    bearFvgUpper := na
-    bullFvgLower := na
-    bullFvgUpper := na
-
-f_reset_trade_management() =>
-    activeStop := na
-    activeT1 := na
-    activeT2 := na
-    activeT3 := na
-    initialRiskTicks := na
-    entryTs := na
-    breakEvenMoved := false
-    partialTaken := false
-
 f_in_session(sess) =>
     not na(time(timeframe.period, sess, sessionTz))
 
@@ -321,7 +288,27 @@ if newDay
     londonHigh := na
     londonLow := na
     if strategy.position_size == 0
-        f_reset_setup()
+        setupStage := STAGE_IDLE
+        setupDir := DIR_NONE
+        sweepTs := na
+        sweepLevel := na
+        sweepExtreme := na
+        sweepImpulseHigh := na
+        sweepImpulseLow := na
+        confirmTs := na
+        impulseHigh := na
+        impulseLow := na
+        eqPrice := na
+        confluenceTs := na
+        confluenceLow := na
+        confluenceHigh := na
+        pullbackExtreme := na
+        hasBearFvgAfterConfirm := false
+        hasBullFvgAfterConfirm := false
+        bearFvgLower := na
+        bearFvgUpper := na
+        bullFvgLower := na
+        bullFvgUpper := na
 
 if useAsiaHighLow and f_in_session(asiaSession)
     asiaHigh := na(asiaHigh) ? high : math.max(asiaHigh, high)
@@ -382,7 +369,27 @@ if strategy.position_size == 0 and setupStage == STAGE_IDLE and canTradeByTime a
 if setupStage == STAGE_SWEPT
     setupAgeMins = (time - sweepTs) / 60000.0
     if setupAgeMins > sweepMaxAgeMinutes
-        f_reset_setup()
+        setupStage := STAGE_IDLE
+        setupDir := DIR_NONE
+        sweepTs := na
+        sweepLevel := na
+        sweepExtreme := na
+        sweepImpulseHigh := na
+        sweepImpulseLow := na
+        confirmTs := na
+        impulseHigh := na
+        impulseLow := na
+        eqPrice := na
+        confluenceTs := na
+        confluenceLow := na
+        confluenceHigh := na
+        pullbackExtreme := na
+        hasBearFvgAfterConfirm := false
+        hasBullFvgAfterConfirm := false
+        bearFvgLower := na
+        bearFvgUpper := na
+        bullFvgLower := na
+        bullFvgUpper := na
     else
         sweepImpulseHigh := math.max(sweepImpulseHigh, high)
         sweepImpulseLow := math.min(sweepImpulseLow, low)
@@ -405,7 +412,27 @@ if setupStage == STAGE_SWEPT
 if setupStage == STAGE_CONFIRMED and isNewBosBar
     confirmAgeMins = (time - confirmTs) / 60000.0
     if confirmAgeMins > maxConfluenceWaitBars * bosTfMinutes
-        f_reset_setup()
+        setupStage := STAGE_IDLE
+        setupDir := DIR_NONE
+        sweepTs := na
+        sweepLevel := na
+        sweepExtreme := na
+        sweepImpulseHigh := na
+        sweepImpulseLow := na
+        confirmTs := na
+        impulseHigh := na
+        impulseLow := na
+        eqPrice := na
+        confluenceTs := na
+        confluenceLow := na
+        confluenceHigh := na
+        pullbackExtreme := na
+        hasBearFvgAfterConfirm := false
+        hasBullFvgAfterConfirm := false
+        bearFvgLower := na
+        bearFvgUpper := na
+        bullFvgLower := na
+        bullFvgUpper := na
     else
         if setupDir == DIR_SHORT and isBearFvgBos
             hasBearFvgAfterConfirm := true
@@ -441,7 +468,27 @@ if setupStage == STAGE_CONFIRMED and isNewBosBar
 if setupStage == STAGE_CONFLUENCE
     confAgeMins = (time - confluenceTs) / 60000.0
     if confAgeMins > maxConfluenceWaitBars * bosTfMinutes
-        f_reset_setup()
+        setupStage := STAGE_IDLE
+        setupDir := DIR_NONE
+        sweepTs := na
+        sweepLevel := na
+        sweepExtreme := na
+        sweepImpulseHigh := na
+        sweepImpulseLow := na
+        confirmTs := na
+        impulseHigh := na
+        impulseLow := na
+        eqPrice := na
+        confluenceTs := na
+        confluenceLow := na
+        confluenceHigh := na
+        pullbackExtreme := na
+        hasBearFvgAfterConfirm := false
+        hasBullFvgAfterConfirm := false
+        bearFvgLower := na
+        bearFvgUpper := na
+        bullFvgLower := na
+        bullFvgUpper := na
     else
         pullbackExtreme := setupDir == DIR_SHORT ? math.max(pullbackExtreme, high) : math.min(pullbackExtreme, low)
 
@@ -492,7 +539,27 @@ if setupStage == STAGE_CONFLUENCE
                         strategy.entry(SHORT_ID, strategy.short, qty = qty, limit = entryPrice)
 
                 tradesToday += 1
-                f_reset_setup()
+                setupStage := STAGE_IDLE
+                setupDir := DIR_NONE
+                sweepTs := na
+                sweepLevel := na
+                sweepExtreme := na
+                sweepImpulseHigh := na
+                sweepImpulseLow := na
+                confirmTs := na
+                impulseHigh := na
+                impulseLow := na
+                eqPrice := na
+                confluenceTs := na
+                confluenceLow := na
+                confluenceHigh := na
+                pullbackExtreme := na
+                hasBearFvgAfterConfirm := false
+                hasBullFvgAfterConfirm := false
+                bearFvgLower := na
+                bearFvgUpper := na
+                bullFvgLower := na
+                bullFvgUpper := na
 
 // ----------------------------------------------------------------------
 // Position management (active exits, BE, partial, max hold)
@@ -501,7 +568,14 @@ newPosition = strategy.position_size != 0 and strategy.position_size[1] == 0
 flatNow = strategy.position_size == 0 and strategy.position_size[1] != 0
 
 if flatNow
-    f_reset_trade_management()
+    activeStop := na
+    activeT1 := na
+    activeT2 := na
+    activeT3 := na
+    initialRiskTicks := na
+    entryTs := na
+    breakEvenMoved := false
+    partialTaken := false
 
 if newPosition
     entryTs := time
