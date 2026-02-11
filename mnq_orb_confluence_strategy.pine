@@ -1,0 +1,234 @@
+//@version=6
+strategy(
+     title = "MNQ ORB 8-Factor Confluence Strategy",
+     shorttitle = "MNQ ORB 8F",
+     overlay = true,
+     pyramiding = 0,
+     calc_on_every_tick = false,
+     process_orders_on_close = true,
+     initial_capital = 10000,
+     commission_type = strategy.commission.cash_per_contract,
+     commission_value = 0.0)
+
+// -----------------------------------------------------------------------------
+// Inputs
+// -----------------------------------------------------------------------------
+groupSession = "Session / ORB"
+tradeSession = input.session("0930-1600", "Trading Session (exchange time)", group = groupSession)
+openingRangeBars = input.int(3, "Opening Range Bars", minval = 1, maxval = 20, group = groupSession)
+maxTradesPerSession = input.int(1, "Max Trades Per Session", minval = 1, maxval = 10, group = groupSession)
+closeAtSessionEnd = input.bool(true, "Force close at session end", group = groupSession)
+
+groupFactors = "8 Confluence Factors"
+volumeLookback = input.int(20, "Volume Lookback", minval = 2, maxval = 100, group = groupFactors)
+supportResistancePeriod = input.int(10, "Support/Resistance Period", minval = 3, maxval = 50, group = groupFactors)
+momentumMultiplier = input.float(1.5, "Momentum Multiplier", minval = 1.0, maxval = 5.0, step = 0.1, group = groupFactors)
+volumeRatioThreshold = input.float(1.2, "Volume Ratio Threshold", minval = 1.0, maxval = 5.0, step = 0.05, group = groupFactors)
+minimumScoreToTrade = input.int(5, "Minimum Score To Trade", minval = 1, maxval = 8, group = groupFactors)
+
+groupRisk = "Risk / Contracts (Futures)"
+contractsScore5 = input.int(1, "Contracts for Score >= 5", minval = 1, maxval = 25, group = groupRisk)
+contractsScore6 = input.int(2, "Contracts for Score >= 6", minval = 1, maxval = 25, group = groupRisk)
+riskDollarsScore5 = input.float(20.0, "Risk $ for Score >= 5", minval = 1.0, maxval = 10000.0, step = 1.0, group = groupRisk)
+riskDollarsScore6 = input.float(20.0, "Risk $ for Score >= 6", minval = 1.0, maxval = 10000.0, step = 1.0, group = groupRisk)
+rewardTp1DollarsScore5 = input.float(10.0, "TP1 $ for Score >= 5", minval = 1.0, maxval = 10000.0, step = 1.0, group = groupRisk)
+rewardTp1DollarsScore6 = input.float(20.0, "TP1 $ for Score >= 6", minval = 1.0, maxval = 10000.0, step = 1.0, group = groupRisk)
+useThreeTargets = input.bool(true, "Use TP1/TP2/TP3 scaling", group = groupRisk)
+
+groupTick = "Tick Value"
+useManualTickValue = input.bool(false, "Use manual tick value override", group = groupTick)
+manualTickValue = input.float(0.5, "Manual tick value ($ per tick per contract)", minval = 0.0001, step = 0.01, group = groupTick)
+
+groupDisplay = "Display"
+showScoreLabel = input.bool(true, "Show score label on entries", group = groupDisplay)
+showFactorDetailsInLabel = input.bool(false, "Include factor details in labels", group = groupDisplay)
+
+// -----------------------------------------------------------------------------
+// Session and opening range tracking
+// -----------------------------------------------------------------------------
+inSession = not na(time(timeframe.period, tradeSession))
+sessionStart = inSession and not inSession[1]
+sessionEnd = not inSession and inSession[1]
+
+var float openingHigh = na
+var float openingLow = na
+var int sessionBarCount = 0
+var int tradesThisSession = 0
+
+if sessionStart
+    openingHigh := high
+    openingLow := low
+    sessionBarCount := 1
+    tradesThisSession := 0
+else if inSession and sessionBarCount > 0 and sessionBarCount < openingRangeBars
+    openingHigh := math.max(openingHigh, high)
+    openingLow := math.min(openingLow, low)
+    sessionBarCount += 1
+else if inSession and sessionBarCount >= openingRangeBars
+    sessionBarCount += 1
+else if not inSession
+    openingHigh := na
+    openingLow := na
+    sessionBarCount := 0
+
+openingRangeReady = inSession and sessionBarCount >= openingRangeBars and not na(openingHigh) and not na(openingLow)
+
+// -----------------------------------------------------------------------------
+// Indicator calculations
+// -----------------------------------------------------------------------------
+rsiValue = ta.rsi(close, 14)
+[macdLine, signalLine, histLine] = ta.macd(close, 12, 26, 9)
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+
+currentBody = math.abs(close - open)
+previousBody = math.abs(close[1] - open[1])
+
+avgVolumeExCurrent = ta.sma(volume[1], volumeLookback - 1)
+volumeRatio = (not na(avgVolumeExCurrent) and avgVolumeExCurrent > 0) ? volume / avgVolumeExCurrent : 1.0
+
+hasFvg = bar_index >= 2 ? (high[2] < low or low[2] > high) : false
+
+recentHigh = ta.highest(high[1], supportResistancePeriod - 1)
+recentLow = ta.lowest(low[1], supportResistancePeriod - 1)
+srRange = recentHigh - recentLow
+nearSr = not na(recentHigh) and not na(recentLow) and srRange > 0 and (math.abs(close - recentHigh) < srRange * 0.2 or math.abs(close - recentLow) < srRange * 0.2)
+
+isLongBreakout = openingRangeReady and close > openingHigh
+isShortBreakout = openingRangeReady and close < openingLow
+hasBreakout = isLongBreakout or isShortBreakout
+
+// -----------------------------------------------------------------------------
+// 8-factor scoring
+// -----------------------------------------------------------------------------
+int score = 0
+string factors = ""
+
+if hasBreakout
+    bool isLong = isLongBreakout
+    score := 1
+    factors := "1_breakout:OK " + (isLong ? "LONG" : "SHORT")
+
+    rsiPass = (isLong and rsiValue > 50 and rsiValue < 70) or (not isLong and rsiValue > 30 and rsiValue < 50)
+    score += rsiPass ? 1 : 0
+    factors += " | 2_rsi:" + (rsiPass ? "OK" : "NO") + " RSI " + str.tostring(rsiValue, "#.0")
+
+    macdPass = (isLong and macdLine > signalLine and histLine > 0) or (not isLong and macdLine < signalLine and histLine < 0)
+    score += macdPass ? 1 : 0
+    factors += " | 3_macd:" + (macdPass ? "OK" : "NO")
+
+    emaPass = (isLong and close > ema20 and ema20 > ema50) or (not isLong and close < ema20 and ema20 < ema50)
+    score += emaPass ? 1 : 0
+    factors += " | 4_ema:" + (emaPass ? "OK" : "NO")
+
+    momentumPass = currentBody > previousBody * momentumMultiplier
+    score += momentumPass ? 1 : 0
+    factors += " | 5_momentum:" + (momentumPass ? "OK" : "NO")
+
+    volumePass = volumeRatio > volumeRatioThreshold
+    score += volumePass ? 1 : 0
+    factors += " | 6_volume:" + (volumePass ? "OK" : "NO") + " " + str.tostring(volumeRatio, "#.00") + "x"
+
+    score += hasFvg ? 1 : 0
+    factors += " | 7_fvg:" + (hasFvg ? "OK" : "NO")
+
+    score += nearSr ? 1 : 0
+    factors += " | 8_sr:" + (nearSr ? "OK" : "NO")
+
+// -----------------------------------------------------------------------------
+// Dynamic contracts and futures tick math
+// -----------------------------------------------------------------------------
+contracts = score >= 6 ? contractsScore6 : score >= 5 ? contractsScore5 : 0
+riskDollars = score >= 6 ? riskDollarsScore6 : score >= 5 ? riskDollarsScore5 : 0.0
+rewardTp1Dollars = score >= 6 ? rewardTp1DollarsScore6 : score >= 5 ? rewardTp1DollarsScore5 : 0.0
+
+autoTickValue = syminfo.mintick * syminfo.pointvalue
+tickValue = useManualTickValue ? manualTickValue : autoTickValue
+validTickValue = tickValue > 0
+
+slTicks = (contracts > 0 and validTickValue and riskDollars > 0) ? math.max(1, int(math.round(riskDollars / (tickValue * contracts)))) : 0
+tp1Ticks = (contracts > 0 and validTickValue and rewardTp1Dollars > 0) ? math.max(1, int(math.round(rewardTp1Dollars / (tickValue * contracts)))) : 0
+tp2Ticks = tp1Ticks * 2
+tp3Ticks = tp1Ticks * 3
+
+shouldTrade = hasBreakout and score >= minimumScoreToTrade and contracts > 0 and slTicks > 0 and tp1Ticks > 0 and inSession
+
+// -----------------------------------------------------------------------------
+// Order placement state
+// -----------------------------------------------------------------------------
+var int activeSlTicks = na
+var int activeTp1Ticks = na
+var int activeTp2Ticks = na
+var int activeTp3Ticks = na
+
+entryAllowed = strategy.position_size == 0 and tradesThisSession < maxTradesPerSession
+
+if shouldTrade and entryAllowed
+    if isLongBreakout
+        strategy.entry("ORB-L", strategy.long, qty = contracts, alert_message = "ORB LONG " + syminfo.ticker + " score=" + str.tostring(score))
+    else
+        strategy.entry("ORB-S", strategy.short, qty = contracts, alert_message = "ORB SHORT " + syminfo.ticker + " score=" + str.tostring(score))
+
+    activeSlTicks := slTicks
+    activeTp1Ticks := tp1Ticks
+    activeTp2Ticks := tp2Ticks
+    activeTp3Ticks := tp3Ticks
+    tradesThisSession += 1
+
+    if showScoreLabel
+        labelText = str.format("Score: {0}/8\nContracts: {1}\nSL: {2} ticks\nTP1: {3} ticks", str.tostring(score), str.tostring(contracts), str.tostring(slTicks), str.tostring(tp1Ticks))
+        if showFactorDetailsInLabel
+            labelText += "\n" + factors
+        label.new(
+             bar_index,
+             close,
+             text = labelText,
+             style = isLongBreakout ? label.style_label_up : label.style_label_down,
+             textcolor = color.white,
+             color = isLongBreakout ? color.new(color.green, 0) : color.new(color.red, 0))
+
+// -----------------------------------------------------------------------------
+// Exit management (actual strategy exits)
+// -----------------------------------------------------------------------------
+if strategy.position_size > 0 and not na(activeSlTicks)
+    longStop = strategy.position_avg_price - activeSlTicks * syminfo.mintick
+    longTp1 = strategy.position_avg_price + activeTp1Ticks * syminfo.mintick
+    longTp2 = strategy.position_avg_price + activeTp2Ticks * syminfo.mintick
+    longTp3 = strategy.position_avg_price + activeTp3Ticks * syminfo.mintick
+
+    if useThreeTargets
+        strategy.exit("L-TP1", from_entry = "ORB-L", stop = longStop, limit = longTp1, qty_percent = 34, alert_message = "ORB LONG TP1/SL " + syminfo.ticker)
+        strategy.exit("L-TP2", from_entry = "ORB-L", stop = longStop, limit = longTp2, qty_percent = 33, alert_message = "ORB LONG TP2/SL " + syminfo.ticker)
+        strategy.exit("L-TP3", from_entry = "ORB-L", stop = longStop, limit = longTp3, qty_percent = 33, alert_message = "ORB LONG TP3/SL " + syminfo.ticker)
+    else
+        strategy.exit("L-EXIT", from_entry = "ORB-L", stop = longStop, limit = longTp1, qty_percent = 100, alert_message = "ORB LONG EXIT " + syminfo.ticker)
+
+if strategy.position_size < 0 and not na(activeSlTicks)
+    shortStop = strategy.position_avg_price + activeSlTicks * syminfo.mintick
+    shortTp1 = strategy.position_avg_price - activeTp1Ticks * syminfo.mintick
+    shortTp2 = strategy.position_avg_price - activeTp2Ticks * syminfo.mintick
+    shortTp3 = strategy.position_avg_price - activeTp3Ticks * syminfo.mintick
+
+    if useThreeTargets
+        strategy.exit("S-TP1", from_entry = "ORB-S", stop = shortStop, limit = shortTp1, qty_percent = 34, alert_message = "ORB SHORT TP1/SL " + syminfo.ticker)
+        strategy.exit("S-TP2", from_entry = "ORB-S", stop = shortStop, limit = shortTp2, qty_percent = 33, alert_message = "ORB SHORT TP2/SL " + syminfo.ticker)
+        strategy.exit("S-TP3", from_entry = "ORB-S", stop = shortStop, limit = shortTp3, qty_percent = 33, alert_message = "ORB SHORT TP3/SL " + syminfo.ticker)
+    else
+        strategy.exit("S-EXIT", from_entry = "ORB-S", stop = shortStop, limit = shortTp1, qty_percent = 100, alert_message = "ORB SHORT EXIT " + syminfo.ticker)
+
+if closeAtSessionEnd and sessionEnd and strategy.position_size != 0
+    strategy.close_all(comment = "Session End", alert_message = "ORB SESSION CLOSE " + syminfo.ticker)
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    activeSlTicks := na
+    activeTp1Ticks := na
+    activeTp2Ticks := na
+    activeTp3Ticks := na
+
+// -----------------------------------------------------------------------------
+// Visuals
+// -----------------------------------------------------------------------------
+plot(openingRangeReady ? openingHigh : na, "Opening High", color = color.new(color.aqua, 0), linewidth = 2, style = plot.style_linebr)
+plot(openingRangeReady ? openingLow : na, "Opening Low", color = color.new(color.orange, 0), linewidth = 2, style = plot.style_linebr)
+
+bgcolor(inSession ? color.new(color.green, 92) : na, title = "Session Background")
