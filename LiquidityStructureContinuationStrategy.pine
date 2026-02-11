@@ -20,12 +20,14 @@ useLondonHighLow = input.bool(true, "Use London High/Low", group = groupLiquidit
 londonSession = input.session("0200-0700", "London Session (CT)", group = groupLiquidity)
 useHourlySwings = input.bool(true, "Use Hourly Swings", group = groupLiquidity)
 swingLookbackH1 = input.int(3, "Swing Lookback Bars H1", minval = 1, maxval = 20, group = groupLiquidity)
+useLocalSwings = input.bool(true, "Use Local Swings (Chart TF)", group = groupLiquidity)
+localSwingLookback = input.int(50, "Local Swing Lookback Bars", minval = 5, maxval = 500, group = groupLiquidity)
 sessionTz = input.string("America/Chicago", "Session Timezone", group = groupLiquidity)
 
 groupSweep = "Sweep"
 sweepBufferTicks = input.int(2, "Sweep Buffer Ticks", minval = 0, maxval = 20, group = groupSweep)
 sweepMaxAgeMinutes = input.int(120, "Sweep Max Age Minutes", minval = 1, maxval = 480, group = groupSweep)
-requireCloseBackInside = input.bool(true, "Require Close Back Inside", group = groupSweep)
+requireCloseBackInside = input.bool(false, "Require Close Back Inside", group = groupSweep)
 maxTradesPerDay = input.int(3, "Max Trades Per Day", minval = 1, maxval = 20, group = groupSweep)
 
 groupSMT = "SMT"
@@ -59,11 +61,12 @@ groupEntry = "Entry"
 entryTriggerType = input.string("1m_BOS", "Entry Trigger Type", options = ["1m_BOS", "1m_iFVG", "RejectionCandle"], group = groupEntry)
 entryPivotStrength = input.int(2, "Entry Pivot Strength (1m)", minval = 1, maxval = 10, group = groupEntry)
 rejectionBodyRatioMin = input.float(0.6, "Rejection Body Ratio Min", minval = 0.1, maxval = 1.0, step = 0.05, group = groupEntry)
+enableFallbackEntryTrigger = input.bool(true, "Enable Fallback Entry Trigger", group = groupEntry)
 entryOffsetTicks = input.int(1, "Entry Offset Ticks", minval = 0, maxval = 20, group = groupEntry)
 entryOrderType = input.string("Market", "Order Type", options = ["Market", "Limit"], group = groupEntry)
 
 groupRisk = "Risk"
-stopType = input.string("AbovePullbackSwing", "Stop Type", options = ["AbovePullbackSwing", "AboveSweepExtreme", "FixedTicks"], group = groupRisk)
+stopType = input.string("FixedTicks", "Stop Type", options = ["AbovePullbackSwing", "AboveSweepExtreme", "FixedTicks"], group = groupRisk)
 stopBufferTicks = input.int(2, "Stop Buffer Ticks", minval = 0, maxval = 20, group = groupRisk)
 fixedStopTicks = input.int(20, "Fixed Stop Ticks", minval = 1, maxval = 300, group = groupRisk)
 maxStopTicks = input.int(60, "Max Stop Ticks", minval = 1, maxval = 500, group = groupRisk)
@@ -233,6 +236,8 @@ primaryHighestPrev = ta.highest(high[1], smtLookback)
 primaryLowestPrev = ta.lowest(low[1], smtLookback)
 secondaryHighestPrev = ta.highest(secHighSmt[1], smtLookback)
 secondaryLowestPrev = ta.lowest(secLowSmt[1], smtLookback)
+localSwingHighPrev = ta.highest(high[1], localSwingLookback)
+localSwingLowPrev = ta.lowest(low[1], localSwingLookback)
 
 close1h = request.security(syminfo.tickerid, "60", close, barmerge.gaps_off, barmerge.lookahead_off)
 close4h = request.security(syminfo.tickerid, "240", close, barmerge.gaps_off, barmerge.lookahead_off)
@@ -353,6 +358,9 @@ if strategy.position_size == 0 and setupStage == STAGE_IDLE and canTradeCooldown
     else if useHourlySwings and f_sweep_high(h1SwingHigh)
         selectedDir := DIR_SHORT
         selectedLevel := h1SwingHigh
+    else if useLocalSwings and f_sweep_high(localSwingHighPrev)
+        selectedDir := DIR_SHORT
+        selectedLevel := localSwingHighPrev
     else if usePDH_PDL and f_sweep_low(pdl)
         selectedDir := DIR_LONG
         selectedLevel := pdl
@@ -365,6 +373,9 @@ if strategy.position_size == 0 and setupStage == STAGE_IDLE and canTradeCooldown
     else if useHourlySwings and f_sweep_low(h1SwingLow)
         selectedDir := DIR_LONG
         selectedLevel := h1SwingLow
+    else if useLocalSwings and f_sweep_low(localSwingLowPrev)
+        selectedDir := DIR_LONG
+        selectedLevel := localSwingLowPrev
 
     biasPass = not useHigherTimeframeBias or biasDir == DIR_NONE or selectedDir == biasDir
     smtPass = f_passes_smt(selectedDir, secHighSmt, secLowSmt, primaryHighestPrev, primaryLowestPrev, secondaryHighestPrev, secondaryLowestPrev)
@@ -408,47 +419,48 @@ if setupStage == STAGE_SWEPT
         sweepImpulseHigh := math.max(sweepImpulseHigh, high)
         sweepImpulseLow := math.min(sweepImpulseLow, low)
 
-        if isNewBosBar
-            bosDisplacementPx = enableQualityFilters ? (minBosDisplacementTicks * tick) : 0.0
-            bosConfirmed = setupDir == DIR_SHORT ? (not na(lastSwingLowBos) and bosClose < lastSwingLowBos - bosDisplacementPx) : setupDir == DIR_LONG ? (not na(lastSwingHighBos) and bosClose > lastSwingHighBos + bosDisplacementPx) : false
-            ifvgConfirmed = setupDir == DIR_SHORT ? isBearFvgBos : setupDir == DIR_LONG ? isBullFvgBos : false
+        bosDisplacementPx = enableQualityFilters ? (minBosDisplacementTicks * tick) : 0.0
+        bosConfirmed = setupDir == DIR_SHORT ? (not na(lastSwingLowBos) and bosClose < lastSwingLowBos - bosDisplacementPx) : setupDir == DIR_LONG ? (not na(lastSwingHighBos) and bosClose > lastSwingHighBos + bosDisplacementPx) : false
+        bosConfirmedFast = setupDir == DIR_SHORT ? (not na(lastSwingLow1m) and close < lastSwingLow1m) : setupDir == DIR_LONG ? (not na(lastSwingHigh1m) and close > lastSwingHigh1m) : false
+        bosConfirmed := bosConfirmed or (not enableQualityFilters and bosConfirmedFast)
+        ifvgConfirmed = setupDir == DIR_SHORT ? isBearFvgBos : setupDir == DIR_LONG ? isBullFvgBos : false
 
-            confirmed = requireBOS and not allowIFVGInsteadOfBOS ? bosConfirmed :
-                 requireBOS and allowIFVGInsteadOfBOS ? (bosConfirmed or ifvgConfirmed) :
-                 not requireBOS and allowIFVGInsteadOfBOS ? ifvgConfirmed : bosConfirmed
+        confirmed = requireBOS and not allowIFVGInsteadOfBOS ? bosConfirmed :
+             requireBOS and allowIFVGInsteadOfBOS ? (bosConfirmed or ifvgConfirmed) :
+             not requireBOS and allowIFVGInsteadOfBOS ? ifvgConfirmed : bosConfirmed
 
-            if confirmed
-                impulseHigh := sweepImpulseHigh
-                impulseLow := sweepImpulseLow
-                impulseTicks = math.abs(impulseHigh - impulseLow) / tick
-                if enableQualityFilters and impulseTicks < minImpulseTicks
-                    setupStage := STAGE_IDLE
-                    setupDir := DIR_NONE
-                    sweepTs := na
-                    sweepLevel := na
-                    sweepExtreme := na
-                    sweepImpulseHigh := na
-                    sweepImpulseLow := na
-                    confirmTs := na
-                    impulseHigh := na
-                    impulseLow := na
-                    eqPrice := na
-                    confluenceTs := na
-                    confluenceLow := na
-                    confluenceHigh := na
-                    pullbackExtreme := na
-                    hasBearFvgAfterConfirm := false
-                    hasBullFvgAfterConfirm := false
-                    bearFvgLower := na
-                    bearFvgUpper := na
-                    bullFvgLower := na
-                    bullFvgUpper := na
-                else
-                    setupStage := STAGE_CONFIRMED
-                    confirmTs := time
-                    eqPrice := (impulseHigh + impulseLow) * 0.5
+        if confirmed
+            impulseHigh := sweepImpulseHigh
+            impulseLow := sweepImpulseLow
+            impulseTicks = math.abs(impulseHigh - impulseLow) / tick
+            if enableQualityFilters and impulseTicks < minImpulseTicks
+                setupStage := STAGE_IDLE
+                setupDir := DIR_NONE
+                sweepTs := na
+                sweepLevel := na
+                sweepExtreme := na
+                sweepImpulseHigh := na
+                sweepImpulseLow := na
+                confirmTs := na
+                impulseHigh := na
+                impulseLow := na
+                eqPrice := na
+                confluenceTs := na
+                confluenceLow := na
+                confluenceHigh := na
+                pullbackExtreme := na
+                hasBearFvgAfterConfirm := false
+                hasBullFvgAfterConfirm := false
+                bearFvgLower := na
+                bearFvgUpper := na
+                bullFvgLower := na
+                bullFvgUpper := na
+            else
+                setupStage := STAGE_CONFIRMED
+                confirmTs := time
+                eqPrice := (impulseHigh + impulseLow) * 0.5
 
-if setupStage == STAGE_CONFIRMED and isNewBosBar
+if setupStage == STAGE_CONFIRMED
     confirmAgeMins = (time - confirmTs) / 60000.0
     if confirmAgeMins > maxConfluenceWaitBars * bosTfMinutes
         setupStage := STAGE_IDLE
@@ -484,10 +496,11 @@ if setupStage == STAGE_CONFIRMED and isNewBosBar
 
         eqLower = eqPrice - eqBandTicks * tick
         eqUpper = eqPrice + eqBandTicks * tick
-        touchedEq = useEquilibrium and bosHigh >= eqLower and bosLow <= eqUpper
-        touchedFvg = useFVG and ((setupDir == DIR_SHORT and hasBearFvgAfterConfirm and bosHigh >= bearFvgLower and bosLow <= bearFvgUpper) or (setupDir == DIR_LONG and hasBullFvgAfterConfirm and bosHigh >= bullFvgLower and bosLow <= bullFvgUpper))
+        touchedEq = useEquilibrium and high >= eqLower and low <= eqUpper
+        touchedFvg = useFVG and ((setupDir == DIR_SHORT and hasBearFvgAfterConfirm and high >= bearFvgLower and low <= bearFvgUpper) or (setupDir == DIR_LONG and hasBullFvgAfterConfirm and high >= bullFvgLower and low <= bullFvgUpper))
         bothConfluenceEnabled = useEquilibrium and useFVG
-        confluencePass = enableQualityFilters and requireBothConfluences and bothConfluenceEnabled ? (touchedEq and touchedFvg) : (touchedEq or touchedFvg)
+        fallbackConfluence = not enableQualityFilters and confirmAgeMins >= bosTfMinutes and ((setupDir == DIR_SHORT and close < eqPrice) or (setupDir == DIR_LONG and close > eqPrice))
+        confluencePass = (enableQualityFilters and requireBothConfluences and bothConfluenceEnabled ? (touchedEq and touchedFvg) : (touchedEq or touchedFvg)) or fallbackConfluence
 
         if confluencePass
             setupStage := STAGE_CONFLUENCE
@@ -500,9 +513,12 @@ if setupStage == STAGE_CONFIRMED and isNewBosBar
             else if touchedEq
                 confluenceLow := eqLower
                 confluenceHigh := eqUpper
-            else
+            else if touchedFvg
                 confluenceLow := setupDir == DIR_SHORT ? bearFvgLower : bullFvgLower
                 confluenceHigh := setupDir == DIR_SHORT ? bearFvgUpper : bullFvgUpper
+            else
+                confluenceLow := close - eqBandTicks * tick
+                confluenceHigh := close + eqBandTicks * tick
 
             pullbackExtreme := setupDir == DIR_SHORT ? high : low
 
@@ -538,9 +554,11 @@ if setupStage == STAGE_CONFLUENCE
         candleBody = math.abs(close - open)
         bodyRatio = candleRange > 0 ? candleBody / candleRange : 0.0
 
-        entryTrigger = entryTriggerType == "1m_BOS" ? (setupDir == DIR_SHORT ? (not na(lastSwingLow1m) and close < lastSwingLow1m) : (not na(lastSwingHigh1m) and close > lastSwingHigh1m)) :
+        baseEntryTrigger = entryTriggerType == "1m_BOS" ? (setupDir == DIR_SHORT ? (not na(lastSwingLow1m) and close < lastSwingLow1m) : (not na(lastSwingHigh1m) and close > lastSwingHigh1m)) :
              entryTriggerType == "1m_iFVG" ? (setupDir == DIR_SHORT ? bearIFvg1m : bullIFvg1m) :
              (touchedConfluenceNow and bodyRatio >= rejectionBodyRatioMin and (setupDir == DIR_SHORT ? close < open : close > open))
+        fallbackTrigger = enableFallbackEntryTrigger and touchedConfluenceNow and (setupDir == DIR_SHORT ? close < close[1] : close > close[1])
+        entryTrigger = baseEntryTrigger or fallbackTrigger
 
         if strategy.position_size == 0 and entryTrigger and canTradeByTime and canTradeCooldown
             entryPrice = entryOrderType == "Limit" ? (setupDir == DIR_SHORT ? close + entryOffsetTicks * tick : close - entryOffsetTicks * tick) : close
@@ -551,6 +569,9 @@ if setupStage == STAGE_CONFLUENCE
 
             stopPrice := setupDir == DIR_SHORT and stopPrice <= entryPrice ? entryPrice + tick : setupDir == DIR_LONG and stopPrice >= entryPrice ? entryPrice - tick : stopPrice
             stopTicks = math.abs(stopPrice - entryPrice) / tick
+            if stopTicks > maxStopTicks and stopType != "FixedTicks"
+                stopPrice := setupDir == DIR_SHORT ? entryPrice + fixedStopTicks * tick : entryPrice - fixedStopTicks * tick
+                stopTicks := math.abs(stopPrice - entryPrice) / tick
 
             riskDollars = percentAccountRisk > 0 ? strategy.equity * (percentAccountRisk / 100.0) : riskPerTradeDollars
             riskPerContract = stopTicks * tickValue
