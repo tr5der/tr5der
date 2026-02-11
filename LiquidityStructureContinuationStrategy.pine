@@ -26,7 +26,7 @@ groupSweep = "Sweep"
 sweepBufferTicks = input.int(2, "Sweep Buffer Ticks", minval = 0, maxval = 20, group = groupSweep)
 sweepMaxAgeMinutes = input.int(120, "Sweep Max Age Minutes", minval = 1, maxval = 480, group = groupSweep)
 requireCloseBackInside = input.bool(true, "Require Close Back Inside", group = groupSweep)
-maxTradesPerDay = input.int(1, "Max Trades Per Day", minval = 1, maxval = 20, group = groupSweep)
+maxTradesPerDay = input.int(3, "Max Trades Per Day", minval = 1, maxval = 20, group = groupSweep)
 
 groupSMT = "SMT"
 enableSMT = input.bool(false, "Enable SMT Filter", group = groupSMT)
@@ -48,16 +48,17 @@ fvgMinSizeTicks = input.int(2, "FVG Min Size Ticks", minval = 1, maxval = 40, gr
 maxConfluenceWaitBars = input.int(12, "Max Confluence Wait Bars (BOS TF)", minval = 1, maxval = 100, group = groupConfluence)
 
 groupQuality = "Quality Filters"
-requireBothConfluences = input.bool(true, "Require Both EQ and FVG", group = groupQuality)
-minImpulseTicks = input.int(20, "Min Impulse Size (Ticks)", minval = 1, maxval = 500, group = groupQuality)
-minBosDisplacementTicks = input.int(4, "Min BOS Displacement (Ticks)", minval = 0, maxval = 100, group = groupQuality)
-minRToFirstTarget = input.float(1.5, "Min R To First Target", minval = 0.5, maxval = 10.0, step = 0.1, group = groupQuality)
-cooldownBarsAfterExit = input.int(30, "Cooldown Bars After Exit", minval = 0, maxval = 500, group = groupQuality)
+enableQualityFilters = input.bool(false, "Enable Quality Filters", group = groupQuality)
+requireBothConfluences = input.bool(false, "Require Both EQ and FVG", group = groupQuality)
+minImpulseTicks = input.int(8, "Min Impulse Size (Ticks)", minval = 1, maxval = 500, group = groupQuality)
+minBosDisplacementTicks = input.int(1, "Min BOS Displacement (Ticks)", minval = 0, maxval = 100, group = groupQuality)
+minRToFirstTarget = input.float(0.75, "Min R To First Target", minval = 0.0, maxval = 10.0, step = 0.1, group = groupQuality)
+cooldownBarsAfterExit = input.int(0, "Cooldown Bars After Exit", minval = 0, maxval = 500, group = groupQuality)
 
 groupEntry = "Entry"
-entryTriggerType = input.string("RejectionCandle", "Entry Trigger Type", options = ["1m_BOS", "1m_iFVG", "RejectionCandle"], group = groupEntry)
+entryTriggerType = input.string("1m_BOS", "Entry Trigger Type", options = ["1m_BOS", "1m_iFVG", "RejectionCandle"], group = groupEntry)
 entryPivotStrength = input.int(2, "Entry Pivot Strength (1m)", minval = 1, maxval = 10, group = groupEntry)
-rejectionBodyRatioMin = input.float(0.7, "Rejection Body Ratio Min", minval = 0.1, maxval = 1.0, step = 0.05, group = groupEntry)
+rejectionBodyRatioMin = input.float(0.6, "Rejection Body Ratio Min", minval = 0.1, maxval = 1.0, step = 0.05, group = groupEntry)
 entryOffsetTicks = input.int(1, "Entry Offset Ticks", minval = 0, maxval = 20, group = groupEntry)
 entryOrderType = input.string("Market", "Order Type", options = ["Market", "Limit"], group = groupEntry)
 
@@ -74,7 +75,7 @@ partialAtR = input.float(0.0, "Partial At R", minval = 0, maxval = 10, step = 0.
 maxHoldMinutes = input.int(120, "Max Hold Minutes", minval = 0, maxval = 1440, group = groupRisk)
 
 groupTime = "Time Filters"
-tradeOnlyRTH = input.bool(true, "Trade Only RTH", group = groupTime)
+tradeOnlyRTH = input.bool(false, "Trade Only RTH", group = groupTime)
 rthSession = input.session("0835-1445", "RTH Session (CT)", group = groupTime)
 
 groupDebug = "Debug"
@@ -151,17 +152,17 @@ f_sweep_high(level) =>
 f_sweep_low(level) =>
     not na(level) and low <= level - bufferPx and (not requireCloseBackInside or close > level)
 
-f_passes_smt(dir, secHigh, secLow) =>
+f_passes_smt(dir, secHigh, secLow, primaryHighRef, primaryLowRef, secondaryHighRef, secondaryLowRef) =>
     if not enableSMT
         true
     else
         if dir == DIR_SHORT
-            primaryMadeNewHigh = high > ta.highest(high[1], smtLookback)
-            secondaryMadeNewHigh = secHigh > ta.highest(secHigh[1], smtLookback)
+            primaryMadeNewHigh = high > primaryHighRef
+            secondaryMadeNewHigh = secHigh > secondaryHighRef
             primaryMadeNewHigh and not secondaryMadeNewHigh
         else if dir == DIR_LONG
-            primaryMadeNewLow = low < ta.lowest(low[1], smtLookback)
-            secondaryMadeNewLow = secLow < ta.lowest(secLow[1], smtLookback)
+            primaryMadeNewLow = low < primaryLowRef
+            secondaryMadeNewLow = secLow < secondaryLowRef
             primaryMadeNewLow and not secondaryMadeNewLow
         else
             false
@@ -228,6 +229,10 @@ pdh = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmer
 pdl = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_off)
 secHighSmt = request.security(smtSymbol, timeframe.period, high, barmerge.gaps_off, barmerge.lookahead_off)
 secLowSmt = request.security(smtSymbol, timeframe.period, low, barmerge.gaps_off, barmerge.lookahead_off)
+primaryHighestPrev = ta.highest(high[1], smtLookback)
+primaryLowestPrev = ta.lowest(low[1], smtLookback)
+secondaryHighestPrev = ta.highest(secHighSmt[1], smtLookback)
+secondaryLowestPrev = ta.lowest(secLowSmt[1], smtLookback)
 
 close1h = request.security(syminfo.tickerid, "60", close, barmerge.gaps_off, barmerge.lookahead_off)
 close4h = request.security(syminfo.tickerid, "240", close, barmerge.gaps_off, barmerge.lookahead_off)
@@ -332,7 +337,7 @@ canTradeCooldown = na(lastFlatBarIndex) or (bar_index - lastFlatBarIndex >= cool
 // ----------------------------------------------------------------------
 // Setup detection and progression
 // ----------------------------------------------------------------------
-if strategy.position_size == 0 and setupStage == STAGE_IDLE and canTradeByTime and canTradeCooldown and tradesToday < maxTradesPerDay
+if strategy.position_size == 0 and setupStage == STAGE_IDLE and canTradeCooldown and tradesToday < maxTradesPerDay
     float selectedLevel = na
     int selectedDir = DIR_NONE
 
@@ -362,7 +367,7 @@ if strategy.position_size == 0 and setupStage == STAGE_IDLE and canTradeByTime a
         selectedLevel := h1SwingLow
 
     biasPass = not useHigherTimeframeBias or biasDir == DIR_NONE or selectedDir == biasDir
-    smtPass = f_passes_smt(selectedDir, secHighSmt, secLowSmt)
+    smtPass = f_passes_smt(selectedDir, secHighSmt, secLowSmt, primaryHighestPrev, primaryLowestPrev, secondaryHighestPrev, secondaryLowestPrev)
 
     if selectedDir != DIR_NONE and biasPass and smtPass
         setupStage := STAGE_SWEPT
@@ -404,7 +409,8 @@ if setupStage == STAGE_SWEPT
         sweepImpulseLow := math.min(sweepImpulseLow, low)
 
         if isNewBosBar
-            bosConfirmed = setupDir == DIR_SHORT ? (not na(lastSwingLowBos) and bosClose < lastSwingLowBos - minBosDisplacementTicks * tick) : setupDir == DIR_LONG ? (not na(lastSwingHighBos) and bosClose > lastSwingHighBos + minBosDisplacementTicks * tick) : false
+            bosDisplacementPx = enableQualityFilters ? (minBosDisplacementTicks * tick) : 0.0
+            bosConfirmed = setupDir == DIR_SHORT ? (not na(lastSwingLowBos) and bosClose < lastSwingLowBos - bosDisplacementPx) : setupDir == DIR_LONG ? (not na(lastSwingHighBos) and bosClose > lastSwingHighBos + bosDisplacementPx) : false
             ifvgConfirmed = setupDir == DIR_SHORT ? isBearFvgBos : setupDir == DIR_LONG ? isBullFvgBos : false
 
             confirmed = requireBOS and not allowIFVGInsteadOfBOS ? bosConfirmed :
@@ -415,7 +421,7 @@ if setupStage == STAGE_SWEPT
                 impulseHigh := sweepImpulseHigh
                 impulseLow := sweepImpulseLow
                 impulseTicks = math.abs(impulseHigh - impulseLow) / tick
-                if impulseTicks < minImpulseTicks
+                if enableQualityFilters and impulseTicks < minImpulseTicks
                     setupStage := STAGE_IDLE
                     setupDir := DIR_NONE
                     sweepTs := na
@@ -481,7 +487,7 @@ if setupStage == STAGE_CONFIRMED and isNewBosBar
         touchedEq = useEquilibrium and bosHigh >= eqLower and bosLow <= eqUpper
         touchedFvg = useFVG and ((setupDir == DIR_SHORT and hasBearFvgAfterConfirm and bosHigh >= bearFvgLower and bosLow <= bearFvgUpper) or (setupDir == DIR_LONG and hasBullFvgAfterConfirm and bosHigh >= bullFvgLower and bosLow <= bullFvgUpper))
         bothConfluenceEnabled = useEquilibrium and useFVG
-        confluencePass = requireBothConfluences and bothConfluenceEnabled ? (touchedEq and touchedFvg) : (touchedEq or touchedFvg)
+        confluencePass = enableQualityFilters and requireBothConfluences and bothConfluenceEnabled ? (touchedEq and touchedFvg) : (touchedEq or touchedFvg)
 
         if confluencePass
             setupStage := STAGE_CONFLUENCE
@@ -554,7 +560,8 @@ if setupStage == STAGE_CONFLUENCE
                 [t1, t2, t3] = f_build_targets(entryPrice, setupDir, stopTicks, pdh, pdl, asiaHigh, asiaLow, londonHigh, londonLow, h1SwingHigh, h1SwingLow)
                 firstTargetDistance = setupDir == DIR_LONG ? (t1 - entryPrice) : (entryPrice - t1)
                 firstTargetR = stopTicks > 0 ? firstTargetDistance / (stopTicks * tick) : 0.0
-                if firstTargetR >= minRToFirstTarget
+                riskRewardPass = not enableQualityFilters or firstTargetR >= minRToFirstTarget
+                if riskRewardPass
                     activeStop := stopPrice
                     activeT1 := t1
                     activeT2 := t2
