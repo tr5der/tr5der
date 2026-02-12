@@ -33,7 +33,7 @@ cashOpenMinute = input.int(30, "CashOpenMinute", minval = 0, maxval = 59, group 
 cashOpenTimeZone = input.string("America/New_York", "CashOpenTimeZone", group = groupSession)
 sessionOpenOffsetMinutes = input.int(930, "SessionOpenOffsetMinutes", minval = 0, maxval = 1440, group = groupSession)
 tradeWindowMinutesAfterOpen = input.int(60, "TradeWindowMinutesAfterOpen", minval = 1, maxval = 240, group = groupSession)
-maxTradesPerSession = input.int(8, "MaxTradesPerSession", minval = 1, maxval = 20, group = groupSession)
+maxTradesPerSession = input.int(6, "MaxTradesPerSession", minval = 1, maxval = 20, group = groupSession)
 oneTradePerTimingWindow = input.bool(false, "OneTradePerTimingWindow", group = groupSession)
 entryExpiryBars = input.int(3, "EntryExpiryBars", minval = 1, maxval = 20, group = groupSession)
 requireOneMinuteChart = input.bool(false, "Require1MinuteChart", group = groupSession)
@@ -114,7 +114,7 @@ useZoneTargets = input.bool(false, "UseZoneTargets", group = groupStops)
 // -----------------------------
 const string groupMgmt = "Management"
 moveToBreakEvenEnabled = input.bool(true, "MoveToBreakEvenEnabled", group = groupMgmt)
-breakEvenTriggerR = input.float(0.7, "BreakEvenTriggerR", minval = 0.2, maxval = 10.0, group = groupMgmt)
+breakEvenTriggerR = input.float(0.55, "BreakEvenTriggerR", minval = 0.2, maxval = 10.0, group = groupMgmt)
 breakEvenPlusTicks = input.int(0, "BreakEvenPlusTicks", minval = 0, maxval = 10, group = groupMgmt)
 scaleOutEnabled = input.bool(false, "ScaleOutEnabled", group = groupMgmt)
 scaleOutPercent = input.int(50, "ScaleOutPercent", minval = 1, maxval = 99, group = groupMgmt)
@@ -145,7 +145,7 @@ requireTimingWindow = input.bool(false, "RequireTimingWindow", group = groupExec
 requireZoneGate = input.bool(false, "RequireZoneGate", group = groupExec)
 requireTrendGate = input.bool(false, "RequireTrendGate", group = groupExec)
 requireVolatilityGate = input.bool(false, "RequireVolatilityGate", group = groupExec)
-enableFallbackPattern = input.bool(true, "EnableFallbackPattern", group = groupExec)
+enableFallbackPattern = input.bool(false, "EnableFallbackPattern", group = groupExec)
 enforceMaxStopFilter = input.bool(false, "EnforceMaxStopFilter", group = groupExec)
 forceMinQtyWhenRiskTooSmall = input.bool(true, "ForceMinQtyWhenRiskTooSmall", group = groupExec)
 minBarsBetweenEntries = input.int(4, "MinBarsBetweenEntries", minval = 0, maxval = 100, group = groupExec)
@@ -155,7 +155,7 @@ showPendingEntryLine = input.bool(true, "ShowPendingEntryLine", group = groupExe
 showSetupMarkers = input.bool(true, "ShowSetupMarkers", group = groupExec)
 entryExecutionMode = input.string("Market", "EntryExecutionMode", options = ["Market", "StopMarket"], group = groupExec)
 highWinScalpMode = input.bool(true, "HighWinScalpMode", group = groupExec)
-highWinTargetR = input.float(0.75, "HighWinTargetR", minval = 0.3, maxval = 3.0, group = groupExec)
+highWinTargetR = input.float(0.60, "HighWinTargetR", minval = 0.3, maxval = 3.0, group = groupExec)
 maxBarsInTradeScalp = input.int(16, "MaxBarsInTradeScalp", minval = 1, maxval = 300, group = groupExec)
 fastExitOnOppositeCandle = input.bool(true, "FastExitOnOppositeCandle", group = groupExec)
 autoRelaxIfNoTrades = input.bool(true, "AutoRelaxIfNoTrades", group = groupExec)
@@ -166,7 +166,7 @@ autoRelaxDisablePrecision = input.bool(true, "AutoRelaxDisablePrecision", group 
 // Inputs: Precision profile
 // -----------------------------
 const string groupPrecision = "Precision"
-precisionMode = input.bool(false, "PrecisionMode", group = groupPrecision)
+precisionMode = input.bool(true, "PrecisionMode", group = groupPrecision)
 precisionMinScore = input.int(5, "PrecisionMinScore", minval = 1, maxval = 10, group = groupPrecision)
 useEMATrendFilter = input.bool(true, "UseEMATrendFilter", group = groupPrecision)
 emaFastLength = input.int(20, "EMAFastLength", minval = 2, maxval = 200, group = groupPrecision)
@@ -179,6 +179,12 @@ rsiPeriodPrecision = input.int(14, "RSIPeriod", minval = 2, maxval = 100, group 
 longRSIMin = input.float(52.0, "LongRSIMin", minval = 1, maxval = 99, group = groupPrecision)
 shortRSIMax = input.float(48.0, "ShortRSIMax", minval = 1, maxval = 99, group = groupPrecision)
 useVWAPFilterPrecision = input.bool(true, "UseVWAPFilter", group = groupPrecision)
+useAdxFilterPrecision = input.bool(true, "UseADXFilter", group = groupPrecision)
+adxPeriodPrecision = input.int(14, "ADXPeriod", minval = 2, maxval = 100, group = groupPrecision)
+minAdxPrecision = input.float(18.0, "MinADX", minval = 1.0, maxval = 100.0, group = groupPrecision)
+useContinuationPattern = input.bool(true, "UseContinuationPattern", group = groupPrecision)
+continuationPullbackBars = input.int(2, "ContinuationPullbackBars", minval = 1, maxval = 10, group = groupPrecision)
+minPatternScore = input.int(2, "MinPatternScore", minval = 1, maxval = 6, group = groupPrecision)
 
 // -----------------------------
 // Constants / state
@@ -734,6 +740,7 @@ float htfEmaFast = request.security(syminfo.tickerid, zoneTimeframe, ta.ema(clos
 float htfEmaSlow = request.security(syminfo.tickerid, zoneTimeframe, ta.ema(close, htfSlowLength), lookahead = barmerge.lookahead_off)
 float rsiPrecision = ta.rsi(close, rsiPeriodPrecision)
 float vwapNow = ta.vwap(hlc3)
+float adxNow = ta.adx(adxPeriodPrecision)
 
 bool emaLongOk = not useEMATrendFilter or (close > emaFast and emaFast > emaSlow)
 bool emaShortOk = not useEMATrendFilter or (close < emaFast and emaFast < emaSlow)
@@ -743,6 +750,7 @@ bool rsiLongOk = not useRSIFilterPrecision or rsiPrecision >= longRSIMin
 bool rsiShortOk = not useRSIFilterPrecision or rsiPrecision <= shortRSIMax
 bool vwapLongOk = not useVWAPFilterPrecision or na(vwapNow) or close >= vwapNow
 bool vwapShortOk = not useVWAPFilterPrecision or na(vwapNow) or close <= vwapNow
+bool adxOk = not useAdxFilterPrecision or adxNow >= minAdxPrecision
 
 float pl = ta.pivotlow(low, 2, 2)
 float ph = ta.pivothigh(high, 2, 2)
@@ -794,8 +802,13 @@ if canEvaluateEntry
     bool bullTLS = bar_index >= 4 and close[3] < open[3] and close[2] < open[2] and close[1] < open[1] and close[2] < close[3] and close[1] < close[2] and close > open and open <= close[1] and close >= open[3] and strong_body(0)
     bool bullFlushFlip = bar_index >= 3 and close[2] < open[2] and strong_body(2) and close[1] > open[1] and close > open and strong_body(1) and strong_body(0) and close > high[2]
     bool bullFallback = close > open and close > high[1]
+    bool bullContinuation = useContinuationPattern and emaLongOk and htfLongOk and close > open and close > high[1] and ta.lowest(low, continuationPullbackBars) <= emaFast
 
-    if enableHigherLowBreak and higherLowBreak
+    if bullContinuation
+        longSignal := true
+        longTrigger := high
+        longAnchor := ta.lowest(low, continuationPullbackBars)
+    else if enableHigherLowBreak and higherLowBreak
         longSignal := true
         longTrigger := math.max(high, recentPivotHigh)
         longAnchor := recentPivotLow
@@ -821,6 +834,16 @@ if canEvaluateEntry
         longTrigger := high
         longAnchor := low
 
+    int longPatternScore = 0
+    longPatternScore += higherLowBreak ? 1 : 0
+    longPatternScore += dblBottom ? 1 : 0
+    longPatternScore += bullEngulf ? 1 : 0
+    longPatternScore += bullTLS ? 1 : 0
+    longPatternScore += bullFlushFlip ? 1 : 0
+    longPatternScore += bullContinuation ? 2 : 0
+    longPatternScore += (enableFallbackPattern and bullFallback) ? 1 : 0
+    bool longPatternScorePass = longPatternScore >= minPatternScore
+
     bool longSignalStrengthOK = not requireEngulfingOrStrongClose or longEngulfingSignal or strong_body(0) or (close > open and close >= high[1])
     bool longZonePass = not effectiveRequireZone or longZoneOK
     bool longTrendPass = not effectiveRequireTrend or longTrendOK
@@ -832,8 +855,9 @@ if canEvaluateEntry
     longPrecisionScore += htfLongOk ? 1 : 0
     longPrecisionScore += rsiLongOk ? 1 : 0
     longPrecisionScore += vwapLongOk ? 1 : 0
+    longPrecisionScore += adxOk ? 1 : 0
     longPrecisionScore += strong_body(0) ? 1 : 0
-    bool longPrecisionPass = not effectivePrecisionMode or (longPrecisionScore >= precisionMinScore and emaLongOk and htfLongOk and rsiLongOk and vwapLongOk and strong_body(0))
+    bool longPrecisionPass = not effectivePrecisionMode or (longPrecisionScore >= precisionMinScore and emaLongOk and htfLongOk and rsiLongOk and vwapLongOk and adxOk and strong_body(0))
 
     bool longPlanReady = false
     int longQty = 0
@@ -841,9 +865,9 @@ if canEvaluateEntry
     float longStop = na
     float longTarget = na
 
-    if longSignal and longSignalStrengthOK and longZonePass and longTrendPass and longPrecisionPass
+    if longSignal and longPatternScorePass and longSignalStrengthOK and longZonePass and longTrendPass and longPrecisionPass
         visLongSetup := true
-    if longZonePass and longTrendPass and longSignal and longSignalStrengthOK and longPrecisionPass
+    if longZonePass and longTrendPass and longSignal and longPatternScorePass and longSignalStrengthOK and longPrecisionPass
         longEntry := round_to_tick(longTrigger + entryOffsetTicks * syminfo.mintick)
         float longExecRef = useStopEntryMode ? longEntry : round_to_tick(close)
         int swingLookback = math.max(6, math.min(30, structureLookbackBars))
@@ -873,8 +897,13 @@ if canEvaluateEntry
     bool bearTLS = bar_index >= 4 and close[3] > open[3] and close[2] > open[2] and close[1] > open[1] and close[2] > close[3] and close[1] > close[2] and close < open and open >= close[1] and close <= open[3] and strong_body(0)
     bool bearFlushFlip = bar_index >= 3 and close[2] > open[2] and strong_body(2) and close[1] < open[1] and close < open and strong_body(1) and strong_body(0) and close < low[2]
     bool bearFallback = close < open and close < low[1]
+    bool bearContinuation = useContinuationPattern and emaShortOk and htfShortOk and close < open and close < low[1] and ta.highest(high, continuationPullbackBars) >= emaFast
 
-    if enableHeadAndShoulders and lowerHighBreak
+    if bearContinuation
+        shortSignal := true
+        shortTrigger := low
+        shortAnchor := ta.highest(high, continuationPullbackBars)
+    else if enableHeadAndShoulders and lowerHighBreak
         shortSignal := true
         shortTrigger := math.min(low, recentPivotLow)
         shortAnchor := math.max(recentPivotHigh, prevPivotHigh)
@@ -896,6 +925,15 @@ if canEvaluateEntry
         shortTrigger := low
         shortAnchor := high
 
+    int shortPatternScore = 0
+    shortPatternScore += lowerHighBreak ? 1 : 0
+    shortPatternScore += bearEngulf ? 1 : 0
+    shortPatternScore += bearTLS ? 1 : 0
+    shortPatternScore += bearFlushFlip ? 1 : 0
+    shortPatternScore += bearContinuation ? 2 : 0
+    shortPatternScore += (enableFallbackPattern and bearFallback) ? 1 : 0
+    bool shortPatternScorePass = shortPatternScore >= minPatternScore
+
     bool shortSignalStrengthOK = not requireEngulfingOrStrongClose or shortEngulfingSignal or strong_body(0) or (close < open and close <= low[1])
     bool shortZonePass = not effectiveRequireZone or shortZoneOK
     bool shortTrendPass = not effectiveRequireTrend or shortTrendOK
@@ -907,8 +945,9 @@ if canEvaluateEntry
     shortPrecisionScore += htfShortOk ? 1 : 0
     shortPrecisionScore += rsiShortOk ? 1 : 0
     shortPrecisionScore += vwapShortOk ? 1 : 0
+    shortPrecisionScore += adxOk ? 1 : 0
     shortPrecisionScore += strong_body(0) ? 1 : 0
-    bool shortPrecisionPass = not effectivePrecisionMode or (shortPrecisionScore >= precisionMinScore and emaShortOk and htfShortOk and rsiShortOk and vwapShortOk and strong_body(0))
+    bool shortPrecisionPass = not effectivePrecisionMode or (shortPrecisionScore >= precisionMinScore and emaShortOk and htfShortOk and rsiShortOk and vwapShortOk and adxOk and strong_body(0))
 
     bool shortPlanReady = false
     int shortQty = 0
@@ -916,9 +955,9 @@ if canEvaluateEntry
     float shortStop = na
     float shortTarget = na
 
-    if shortSignal and shortSignalStrengthOK and shortZonePass and shortTrendPass and shortPrecisionPass
+    if shortSignal and shortPatternScorePass and shortSignalStrengthOK and shortZonePass and shortTrendPass and shortPrecisionPass
         visShortSetup := true
-    if shortZonePass and shortTrendPass and shortSignal and shortSignalStrengthOK and shortPrecisionPass
+    if shortZonePass and shortTrendPass and shortSignal and shortPatternScorePass and shortSignalStrengthOK and shortPrecisionPass
         shortEntry := round_to_tick(shortTrigger - entryOffsetTicks * syminfo.mintick)
         float shortExecRef = useStopEntryMode ? shortEntry : round_to_tick(close)
         int swingLookback = math.max(6, math.min(30, structureLookbackBars))
