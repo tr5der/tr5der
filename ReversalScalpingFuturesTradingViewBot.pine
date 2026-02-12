@@ -33,7 +33,7 @@ cashOpenMinute = input.int(30, "CashOpenMinute", minval = 0, maxval = 59, group 
 cashOpenTimeZone = input.string("America/New_York", "CashOpenTimeZone", group = groupSession)
 sessionOpenOffsetMinutes = input.int(930, "SessionOpenOffsetMinutes", minval = 0, maxval = 1440, group = groupSession)
 tradeWindowMinutesAfterOpen = input.int(60, "TradeWindowMinutesAfterOpen", minval = 1, maxval = 240, group = groupSession)
-maxTradesPerSession = input.int(6, "MaxTradesPerSession", minval = 1, maxval = 20, group = groupSession)
+maxTradesPerSession = input.int(3, "MaxTradesPerSession", minval = 1, maxval = 20, group = groupSession)
 oneTradePerTimingWindow = input.bool(false, "OneTradePerTimingWindow", group = groupSession)
 entryExpiryBars = input.int(3, "EntryExpiryBars", minval = 1, maxval = 20, group = groupSession)
 requireOneMinuteChart = input.bool(false, "Require1MinuteChart", group = groupSession)
@@ -114,7 +114,7 @@ useZoneTargets = input.bool(false, "UseZoneTargets", group = groupStops)
 // -----------------------------
 const string groupMgmt = "Management"
 moveToBreakEvenEnabled = input.bool(true, "MoveToBreakEvenEnabled", group = groupMgmt)
-breakEvenTriggerR = input.float(0.55, "BreakEvenTriggerR", minval = 0.2, maxval = 10.0, group = groupMgmt)
+breakEvenTriggerR = input.float(0.40, "BreakEvenTriggerR", minval = 0.2, maxval = 10.0, group = groupMgmt)
 breakEvenPlusTicks = input.int(0, "BreakEvenPlusTicks", minval = 0, maxval = 10, group = groupMgmt)
 scaleOutEnabled = input.bool(false, "ScaleOutEnabled", group = groupMgmt)
 scaleOutPercent = input.int(50, "ScaleOutPercent", minval = 1, maxval = 99, group = groupMgmt)
@@ -146,22 +146,22 @@ const string groupExec = "Execution"
 enforceTradeWindow = input.bool(false, "EnforceTradeWindowAfterOpen", group = groupExec)
 requireTimingWindow = input.bool(false, "RequireTimingWindow", group = groupExec)
 requireZoneGate = input.bool(false, "RequireZoneGate", group = groupExec)
-requireTrendGate = input.bool(false, "RequireTrendGate", group = groupExec)
-requireVolatilityGate = input.bool(false, "RequireVolatilityGate", group = groupExec)
+requireTrendGate = input.bool(true, "RequireTrendGate", group = groupExec)
+requireVolatilityGate = input.bool(true, "RequireVolatilityGate", group = groupExec)
 enableFallbackPattern = input.bool(false, "EnableFallbackPattern", group = groupExec)
 enforceMaxStopFilter = input.bool(false, "EnforceMaxStopFilter", group = groupExec)
 forceMinQtyWhenRiskTooSmall = input.bool(true, "ForceMinQtyWhenRiskTooSmall", group = groupExec)
-minBarsBetweenEntries = input.int(4, "MinBarsBetweenEntries", minval = 0, maxval = 100, group = groupExec)
+minBarsBetweenEntries = input.int(6, "MinBarsBetweenEntries", minval = 0, maxval = 100, group = groupExec)
 showSignalMarkers = input.bool(true, "ShowSignalMarkers", group = groupExec)
 showRawPatternMarkers = input.bool(false, "ShowRawPatternMarkers", group = groupExec)
 showPendingEntryLine = input.bool(true, "ShowPendingEntryLine", group = groupExec)
 showSetupMarkers = input.bool(true, "ShowSetupMarkers", group = groupExec)
 entryExecutionMode = input.string("Market", "EntryExecutionMode", options = ["Market", "StopMarket"], group = groupExec)
 highWinScalpMode = input.bool(true, "HighWinScalpMode", group = groupExec)
-highWinTargetR = input.float(0.60, "HighWinTargetR", minval = 0.3, maxval = 3.0, group = groupExec)
+highWinTargetR = input.float(0.50, "HighWinTargetR", minval = 0.3, maxval = 3.0, group = groupExec)
 maxBarsInTradeScalp = input.int(16, "MaxBarsInTradeScalp", minval = 1, maxval = 300, group = groupExec)
 fastExitOnOppositeCandle = input.bool(true, "FastExitOnOppositeCandle", group = groupExec)
-autoRelaxIfNoTrades = input.bool(true, "AutoRelaxIfNoTrades", group = groupExec)
+autoRelaxIfNoTrades = input.bool(false, "AutoRelaxIfNoTrades", group = groupExec)
 autoRelaxMinutes = input.int(45, "AutoRelaxAfterMinutes", minval = 1, maxval = 240, group = groupExec)
 autoRelaxDisablePrecision = input.bool(true, "AutoRelaxDisablePrecision", group = groupExec)
 
@@ -170,7 +170,7 @@ autoRelaxDisablePrecision = input.bool(true, "AutoRelaxDisablePrecision", group 
 // -----------------------------
 const string groupPrecision = "Precision"
 precisionMode = input.bool(true, "PrecisionMode", group = groupPrecision)
-precisionMinScore = input.int(5, "PrecisionMinScore", minval = 1, maxval = 10, group = groupPrecision)
+precisionMinScore = input.int(6, "PrecisionMinScore", minval = 1, maxval = 10, group = groupPrecision)
 useEMATrendFilter = input.bool(true, "UseEMATrendFilter", group = groupPrecision)
 emaFastLength = input.int(20, "EMAFastLength", minval = 2, maxval = 200, group = groupPrecision)
 emaSlowLength = input.int(50, "EMASlowLength", minval = 3, maxval = 300, group = groupPrecision)
@@ -179,13 +179,14 @@ htfFastLength = input.int(34, "HTFFastLength", minval = 2, maxval = 300, group =
 htfSlowLength = input.int(89, "HTFSlowLength", minval = 3, maxval = 400, group = groupPrecision)
 useRSIFilterPrecision = input.bool(true, "UseRSIFilter", group = groupPrecision)
 rsiPeriodPrecision = input.int(14, "RSIPeriod", minval = 2, maxval = 100, group = groupPrecision)
-longRSIMin = input.float(52.0, "LongRSIMin", minval = 1, maxval = 99, group = groupPrecision)
-shortRSIMax = input.float(48.0, "ShortRSIMax", minval = 1, maxval = 99, group = groupPrecision)
+longRSIMin = input.float(55.0, "LongRSIMin", minval = 1, maxval = 99, group = groupPrecision)
+shortRSIMax = input.float(45.0, "ShortRSIMax", minval = 1, maxval = 99, group = groupPrecision)
 useVWAPFilterPrecision = input.bool(true, "UseVWAPFilter", group = groupPrecision)
 useAdxFilterPrecision = input.bool(true, "UseADXFilter", group = groupPrecision)
 adxPeriodPrecision = input.int(14, "ADXPeriod", minval = 2, maxval = 100, group = groupPrecision)
-minAdxPrecision = input.float(18.0, "MinADX", minval = 1.0, maxval = 100.0, group = groupPrecision)
+minAdxPrecision = input.float(22.0, "MinADX", minval = 1.0, maxval = 100.0, group = groupPrecision)
 useContinuationPattern = input.bool(true, "UseContinuationPattern", group = groupPrecision)
+continuationOnlyMode = input.bool(true, "ContinuationOnlyMode", group = groupPrecision)
 continuationPullbackBars = input.int(2, "ContinuationPullbackBars", minval = 1, maxval = 10, group = groupPrecision)
 minPatternScore = input.int(2, "MinPatternScore", minval = 1, maxval = 6, group = groupPrecision)
 
@@ -837,35 +838,41 @@ if canEvaluateEntry
     bool bullFallback = close > open and close > high[1]
     bool bullContinuation = useContinuationPattern and emaLongOk and htfLongOk and close > open and close > high[1] and continuationLow <= emaFast
 
-    if bullContinuation
-        longSignal := true
-        longTrigger := high
-        longAnchor := continuationLow
-    else if enableHigherLowBreak and higherLowBreak
-        longSignal := true
-        longTrigger := math.max(high, recentPivotHigh)
-        longAnchor := recentPivotLow
-    else if enableDoubleBottom and dblBottom
-        longSignal := true
-        longTrigger := math.max(high, recentPivotHigh)
-        longAnchor := math.min(recentPivotLow, prevPivotLow)
-    else if enableEngulfing and bullEngulf
-        longSignal := true
-        longEngulfingSignal := true
-        longTrigger := high
-        longAnchor := math.min(low, low[1])
-    else if enableThreeLineStrike and bullTLS
-        longSignal := true
-        longTrigger := high
-        longAnchor := math.min(math.min(low, low[1]), math.min(low[2], low[3]))
-    else if bullFlushFlip
-        longSignal := true
-        longTrigger := high
-        longAnchor := math.min(math.min(low, low[1]), low[2])
-    else if enableFallbackPattern and bullFallback
-        longSignal := true
-        longTrigger := high
-        longAnchor := low
+    if continuationOnlyMode
+        if bullContinuation
+            longSignal := true
+            longTrigger := high
+            longAnchor := continuationLow
+    else
+        if bullContinuation
+            longSignal := true
+            longTrigger := high
+            longAnchor := continuationLow
+        else if enableHigherLowBreak and higherLowBreak
+            longSignal := true
+            longTrigger := math.max(high, recentPivotHigh)
+            longAnchor := recentPivotLow
+        else if enableDoubleBottom and dblBottom
+            longSignal := true
+            longTrigger := math.max(high, recentPivotHigh)
+            longAnchor := math.min(recentPivotLow, prevPivotLow)
+        else if enableEngulfing and bullEngulf
+            longSignal := true
+            longEngulfingSignal := true
+            longTrigger := high
+            longAnchor := math.min(low, low[1])
+        else if enableThreeLineStrike and bullTLS
+            longSignal := true
+            longTrigger := high
+            longAnchor := math.min(math.min(low, low[1]), math.min(low[2], low[3]))
+        else if bullFlushFlip
+            longSignal := true
+            longTrigger := high
+            longAnchor := math.min(math.min(low, low[1]), low[2])
+        else if enableFallbackPattern and bullFallback
+            longSignal := true
+            longTrigger := high
+            longAnchor := low
 
     int longPatternScore = 0
     longPatternScore += higherLowBreak ? 1 : 0
@@ -931,31 +938,37 @@ if canEvaluateEntry
     bool bearFallback = close < open and close < low[1]
     bool bearContinuation = useContinuationPattern and emaShortOk and htfShortOk and close < open and close < low[1] and continuationHigh >= emaFast
 
-    if bearContinuation
-        shortSignal := true
-        shortTrigger := low
-        shortAnchor := continuationHigh
-    else if enableHeadAndShoulders and lowerHighBreak
-        shortSignal := true
-        shortTrigger := math.min(low, recentPivotLow)
-        shortAnchor := math.max(recentPivotHigh, prevPivotHigh)
-    else if enableEngulfing and bearEngulf
-        shortSignal := true
-        shortEngulfingSignal := true
-        shortTrigger := low
-        shortAnchor := math.max(high, high[1])
-    else if enableThreeLineStrike and bearTLS
-        shortSignal := true
-        shortTrigger := low
-        shortAnchor := math.max(math.max(high, high[1]), math.max(high[2], high[3]))
-    else if bearFlushFlip
-        shortSignal := true
-        shortTrigger := low
-        shortAnchor := math.max(math.max(high, high[1]), high[2])
-    else if enableFallbackPattern and bearFallback
-        shortSignal := true
-        shortTrigger := low
-        shortAnchor := high
+    if continuationOnlyMode
+        if bearContinuation
+            shortSignal := true
+            shortTrigger := low
+            shortAnchor := continuationHigh
+    else
+        if bearContinuation
+            shortSignal := true
+            shortTrigger := low
+            shortAnchor := continuationHigh
+        else if enableHeadAndShoulders and lowerHighBreak
+            shortSignal := true
+            shortTrigger := math.min(low, recentPivotLow)
+            shortAnchor := math.max(recentPivotHigh, prevPivotHigh)
+        else if enableEngulfing and bearEngulf
+            shortSignal := true
+            shortEngulfingSignal := true
+            shortTrigger := low
+            shortAnchor := math.max(high, high[1])
+        else if enableThreeLineStrike and bearTLS
+            shortSignal := true
+            shortTrigger := low
+            shortAnchor := math.max(math.max(high, high[1]), math.max(high[2], high[3]))
+        else if bearFlushFlip
+            shortSignal := true
+            shortTrigger := low
+            shortAnchor := math.max(math.max(high, high[1]), high[2])
+        else if enableFallbackPattern and bearFallback
+            shortSignal := true
+            shortTrigger := low
+            shortAnchor := high
 
     int shortPatternScore = 0
     shortPatternScore += lowerHighBreak ? 1 : 0
