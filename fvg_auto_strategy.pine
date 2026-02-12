@@ -154,12 +154,12 @@ if not in_trade
         // --- STEP 1: Scan HTF (1H/4H) ---
         can_scan_htf = setup_allowed and (setup_stage == 0 or (allow_htf_override and setup_stage == 1 and not htf_fvg_touched))
         if can_scan_htf and (new_htf1_bar or new_htf2_bar)
-            candidate_found = false
-            candidate_dir = 0
-            candidate_upper = na
-            candidate_lower = na
-            candidate_time = na
-            candidate_source = "none"
+            bool candidate_found = false
+            int candidate_dir = 0
+            float candidate_upper = na
+            float candidate_lower = na
+            int candidate_time = na
+            string candidate_source = "none"
 
             if new_htf1_bar and htf1_bull
                 gap_ticks_1h_bull = f_gap_ticks(htf1_bull_upper, htf1_bull_lower)
