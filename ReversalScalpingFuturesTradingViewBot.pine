@@ -16,7 +16,7 @@ strategy(
 // -----------------------------
 // Inputs: Timing
 // -----------------------------
-groupTiming = "Timing"
+const string groupTiming = "Timing"
 useTiming15m = input.bool(true, "UseTiming15m", group = groupTiming)
 useTiming30m = input.bool(true, "UseTiming30m", group = groupTiming)
 useTiming90m = input.bool(false, "UseTiming90m", group = groupTiming)
@@ -25,9 +25,8 @@ timingWindowToleranceMinutes = input.int(2, "TimingWindowToleranceMinutes", minv
 // -----------------------------
 // Inputs: Session
 // -----------------------------
-groupSession = "Session"
+const string groupSession = "Session"
 sessionTemplate = input.session("1800-1700", "SessionTemplate", group = groupSession)
-sessionTimeZone = input.string("America/New_York", "SessionTimeZone", group = groupSession)
 sessionOpenOffsetMinutes = input.int(930, "SessionOpenOffsetMinutes", minval = 0, maxval = 1440, group = groupSession)
 tradeWindowMinutesAfterOpen = input.int(60, "TradeWindowMinutesAfterOpen", minval = 1, maxval = 240, group = groupSession)
 maxTradesPerSession = input.int(1, "MaxTradesPerSession", minval = 1, maxval = 10, group = groupSession)
@@ -44,7 +43,7 @@ allowFriday = input.bool(true, "Trade Friday", group = groupSession)
 // -----------------------------
 // Inputs: Zones
 // -----------------------------
-groupZones = "Zones"
+const string groupZones = "Zones"
 zoneTimeframe = input.timeframe("15", "ZoneTimeframeMinutes", group = groupZones)
 zoneLookbackDays = input.int(3, "ZoneLookbackDays", minval = 1, maxval = 10, group = groupZones)
 pivotStrength = input.int(4, "PivotStrength", minval = 2, maxval = 20, group = groupZones)
@@ -61,7 +60,7 @@ minGapTicks = input.int(12, "MinGapTicks", minval = 1, maxval = 100, group = gro
 // -----------------------------
 // Inputs: Volatility / Chop
 // -----------------------------
-groupVol = "Volatility"
+const string groupVol = "Volatility"
 useATRFilter = input.bool(true, "UseATRFilter", group = groupVol)
 atrPeriod = input.int(14, "ATRPeriod", minval = 2, maxval = 100, group = groupVol)
 minATR = input.float(1.0, "MinATR", minval = 0.01, group = groupVol)
@@ -75,7 +74,7 @@ maxChopRatio = input.float(3.2, "MaxChopRatio", minval = 1.0, maxval = 20.0, gro
 // -----------------------------
 // Inputs: Trend / Overextension
 // -----------------------------
-groupTrend = "Trend"
+const string groupTrend = "Trend"
 requireTrendShift = input.bool(true, "RequireTrendShift", group = groupTrend)
 structureLookbackBars = input.int(30, "StructureLookbackBars", minval = 10, maxval = 200, group = groupTrend)
 useOverextensionRule = input.bool(false, "UseOverextensionRule", group = groupTrend)
@@ -84,7 +83,7 @@ overextensionATRMultiplier = input.float(1.5, "OverextensionATRMultiplier", minv
 // -----------------------------
 // Inputs: Patterns
 // -----------------------------
-groupPatterns = "Patterns"
+const string groupPatterns = "Patterns"
 enableDoubleBottom = input.bool(true, "EnableDoubleBottom", group = groupPatterns)
 doubleBottomToleranceTicks = input.int(4, "DoubleBottomToleranceTicks", minval = 1, maxval = 20, group = groupPatterns)
 enableHigherLowBreak = input.bool(true, "EnableHigherLowBreak", group = groupPatterns)
@@ -98,7 +97,7 @@ entryOffsetTicks = input.int(1, "EntryOffsetTicks", minval = 0, maxval = 10, gro
 // -----------------------------
 // Inputs: Stops / Targets
 // -----------------------------
-groupStops = "StopsTargets"
+const string groupStops = "StopsTargets"
 stopMethod = input.string("SwingExtreme", "StopMethod", options = ["SwingExtreme", "SignalBar", "FixedTicks"], group = groupStops)
 stopBufferTicks = input.int(2, "StopBufferTicks", minval = 0, maxval = 20, group = groupStops)
 fixedStopTicks = input.int(20, "FixedStopTicks", minval = 1, maxval = 100, group = groupStops)
@@ -109,7 +108,7 @@ useZoneTargets = input.bool(false, "UseZoneTargets", group = groupStops)
 // -----------------------------
 // Inputs: Management
 // -----------------------------
-groupMgmt = "Management"
+const string groupMgmt = "Management"
 moveToBreakEvenEnabled = input.bool(true, "MoveToBreakEvenEnabled", group = groupMgmt)
 breakEvenTriggerR = input.float(2.0, "BreakEvenTriggerR", minval = 0.5, maxval = 10.0, group = groupMgmt)
 breakEvenPlusTicks = input.int(0, "BreakEvenPlusTicks", minval = 0, maxval = 10, group = groupMgmt)
@@ -124,7 +123,7 @@ maxHoldMinutes = input.int(0, "MaxHoldMinutes", minval = 0, maxval = 240, group 
 // -----------------------------
 // Inputs: Risk / Sizing
 // -----------------------------
-groupRisk = "Risk"
+const string groupRisk = "Risk"
 useFixedDollarRisk = input.bool(true, "UseFixedDollarRisk", group = groupRisk)
 riskPerTradeDollars = input.float(300.0, "RiskPerTradeDollars", minval = 1, group = groupRisk)
 minContracts = input.int(1, "MinContracts", minval = 1, maxval = 100, group = groupRisk)
@@ -401,7 +400,7 @@ build_exit_message(string side, string reason) =>
 // -----------------------------
 // Session tracking
 // -----------------------------
-bool inTemplateSession = not na(time(timeframe.period, sessionTemplate, sessionTimeZone))
+bool inTemplateSession = not na(time(timeframe.period, sessionTemplate))
 bool newTemplateSession = inTemplateSession and not inTemplateSession[1]
 
 if newTemplateSession
