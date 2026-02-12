@@ -27,6 +27,10 @@ timingWindowToleranceMinutes = input.int(2, "TimingWindowToleranceMinutes", minv
 // -----------------------------
 const string groupSession = "Session"
 sessionTemplate = input.session("1800-1700", "SessionTemplate", group = groupSession)
+cashOpenMode = input.string("ClockTime", "CashOpenMode", options = ["ClockTime", "SessionOffset"], group = groupSession)
+cashOpenHour = input.int(9, "CashOpenHour", minval = 0, maxval = 23, group = groupSession)
+cashOpenMinute = input.int(30, "CashOpenMinute", minval = 0, maxval = 59, group = groupSession)
+cashOpenTimeZone = input.string("America/New_York", "CashOpenTimeZone", group = groupSession)
 sessionOpenOffsetMinutes = input.int(930, "SessionOpenOffsetMinutes", minval = 0, maxval = 1440, group = groupSession)
 tradeWindowMinutesAfterOpen = input.int(60, "TradeWindowMinutesAfterOpen", minval = 1, maxval = 240, group = groupSession)
 maxTradesPerSession = input.int(1, "MaxTradesPerSession", minval = 1, maxval = 10, group = groupSession)
@@ -406,7 +410,7 @@ if newTemplateSession
 
     sessionInitialized := true
     sessionStartTs := time
-    cashOpenTs := sessionStartTs + sessionOpenOffsetMinutes * 60000
+    cashOpenTs := cashOpenMode == "SessionOffset" ? (sessionStartTs + sessionOpenOffsetMinutes * 60000) : na
     cashOpenTriggered := false
 
     sessionHigh := high
@@ -429,13 +433,26 @@ if inTemplateSession and not newTemplateSession
     sessionLow := na(sessionLow) ? low : math.min(sessionLow, low)
     sessionClose := close
 
-if inTemplateSession and not cashOpenTriggered and not na(cashOpenTs)
-    if time < cashOpenTs and sessionOpenOffsetMinutes > 0
+if inTemplateSession and not cashOpenTriggered
+    int openMinuteOfDay = cashOpenHour * 60 + cashOpenMinute
+    int currentMinuteOfDay = hour(time, cashOpenTimeZone) * 60 + minute(time, cashOpenTimeZone)
+    int prevMinuteOfDay = na(time[1]) ? currentMinuteOfDay : (hour(time[1], cashOpenTimeZone) * 60 + minute(time[1], cashOpenTimeZone))
+    bool newClockDay = not na(time[1]) and (
+         year(time, cashOpenTimeZone) != year(time[1], cashOpenTimeZone) or
+         month(time, cashOpenTimeZone) != month(time[1], cashOpenTimeZone) or
+         dayofmonth(time, cashOpenTimeZone) != dayofmonth(time[1], cashOpenTimeZone))
+
+    bool clockOpenNow = currentMinuteOfDay >= openMinuteOfDay and (prevMinuteOfDay < openMinuteOfDay or newClockDay)
+    bool offsetOpenNow = not na(cashOpenTs) and time >= cashOpenTs
+    bool shouldTriggerOpen = cashOpenMode == "ClockTime" ? clockOpenNow : offsetOpenNow
+
+    if not shouldTriggerOpen
         overnightHigh := na(overnightHigh) ? high : math.max(overnightHigh, high)
         overnightLow := na(overnightLow) ? low : math.min(overnightLow, low)
         hasOvernightData := true
 
-    if time >= cashOpenTs
+    if shouldTriggerOpen
+        cashOpenTs := time
         cashOpenTriggered := true
         tradesThisSessionWindow := 0
         usedTiming15 := false
