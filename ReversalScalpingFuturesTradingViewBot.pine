@@ -33,7 +33,7 @@ cashOpenMinute = input.int(30, "CashOpenMinute", minval = 0, maxval = 59, group 
 cashOpenTimeZone = input.string("America/New_York", "CashOpenTimeZone", group = groupSession)
 sessionOpenOffsetMinutes = input.int(930, "SessionOpenOffsetMinutes", minval = 0, maxval = 1440, group = groupSession)
 tradeWindowMinutesAfterOpen = input.int(60, "TradeWindowMinutesAfterOpen", minval = 1, maxval = 240, group = groupSession)
-maxTradesPerSession = input.int(1, "MaxTradesPerSession", minval = 1, maxval = 10, group = groupSession)
+maxTradesPerSession = input.int(2, "MaxTradesPerSession", minval = 1, maxval = 10, group = groupSession)
 oneTradePerTimingWindow = input.bool(false, "OneTradePerTimingWindow", group = groupSession)
 entryExpiryBars = input.int(3, "EntryExpiryBars", minval = 1, maxval = 20, group = groupSession)
 requireOneMinuteChart = input.bool(false, "Require1MinuteChart", group = groupSession)
@@ -152,6 +152,7 @@ minBarsBetweenEntries = input.int(3, "MinBarsBetweenEntries", minval = 0, maxval
 showSignalMarkers = input.bool(true, "ShowSignalMarkers", group = groupExec)
 showRawPatternMarkers = input.bool(false, "ShowRawPatternMarkers", group = groupExec)
 showPendingEntryLine = input.bool(true, "ShowPendingEntryLine", group = groupExec)
+showSetupMarkers = input.bool(false, "ShowSetupMarkers", group = groupExec)
 entryExecutionMode = input.string("Market", "EntryExecutionMode", options = ["Market", "StopMarket"], group = groupExec)
 
 // -----------------------------
@@ -561,6 +562,7 @@ if justFlat
 
 bool pendingOrderExists = pendingLong or pendingShort
 bool pendingExpired = pendingOrderExists and not na(pendingBar) and (bar_index - pendingBar >= entryExpiryBars)
+bool stopModeNow = entryExecutionMode == "StopMarket"
 
 if pendingLong and strategy.position_size <= 0 and (not withinTradeWindow or pendingExpired)
     strategy.cancel("L")
@@ -575,6 +577,11 @@ if pendingShort and strategy.position_size >= 0 and (not withinTradeWindow or pe
     pendingTimingBucket := 0
     pendingBar := na
     plannedEntry := na
+
+// Safety reset for market-entry mode if a timing bucket remains set without a fill.
+if not stopModeNow and strategy.position_size == 0 and not pendingOrderExists and pendingTimingBucket != 0 and not na(pendingBar) and (bar_index - pendingBar >= 1)
+    pendingTimingBucket := 0
+    pendingBar := na
 
 int trailLookback = math.max(5, math.min(20, int(math.floor(structureLookbackBars * 0.5))))
 float trailBaseLow = ta.lowest(low, trailLookback)
@@ -858,8 +865,8 @@ if canEvaluateEntry
         plannedEntry := useStopEntryMode ? longEntry : close
         pendingLong := useStopEntryMode
         pendingShort := false
-        pendingTimingBucket := timingBucket
-        pendingBar := useStopEntryMode ? bar_index : na
+        pendingTimingBucket := requireTimingWindow ? timingBucket : 0
+        pendingBar := bar_index
         visLongOrderSent := true
 
     else if shortPlanReady
@@ -873,8 +880,8 @@ if canEvaluateEntry
         plannedEntry := useStopEntryMode ? shortEntry : close
         pendingShort := useStopEntryMode
         pendingLong := false
-        pendingTimingBucket := timingBucket
-        pendingBar := useStopEntryMode ? bar_index : na
+        pendingTimingBucket := requireTimingWindow ? timingBucket : 0
+        pendingBar := bar_index
         visShortOrderSent := true
 
 // -----------------------------
@@ -888,10 +895,10 @@ plot(strategy.position_size != 0 ? activeStop : na, "Active Stop", color = color
 plot(strategy.position_size != 0 ? activeTarget : na, "Active Target", color = color.new(color.green, 0), linewidth = 2, style = plot.style_linebr)
 plot(cashOpenTriggered ? minutesFromOpen : na, "MinutesFromOpen", color = color.new(color.blue, 70), display = display.none)
 
-plotshape(showSignalMarkers and visLongSetup, title = "Long Setup", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small, text = "BUY")
-plotshape(showSignalMarkers and visShortSetup, title = "Short Setup", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small, text = "SELL")
-plotshape(showSignalMarkers and visLongOrderSent, title = "Long Order Sent", style = shape.labelup, location = location.belowbar, color = color.new(color.green, 0), textcolor = color.white, size = size.tiny, text = "L STOP")
-plotshape(showSignalMarkers and visShortOrderSent, title = "Short Order Sent", style = shape.labeldown, location = location.abovebar, color = color.new(color.maroon, 0), textcolor = color.white, size = size.tiny, text = "S STOP")
+plotshape(showSignalMarkers and visLongOrderSent, title = "Buy Order Sent", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small, text = "BUY")
+plotshape(showSignalMarkers and visShortOrderSent, title = "Sell Order Sent", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small, text = "SELL")
+plotshape(showSetupMarkers and visLongSetup, title = "Long Setup", style = shape.circle, location = location.belowbar, color = color.new(color.green, 70), size = size.tiny, text = "LS")
+plotshape(showSetupMarkers and visShortSetup, title = "Short Setup", style = shape.circle, location = location.abovebar, color = color.new(color.red, 70), size = size.tiny, text = "SS")
 plotshape(showSignalMarkers and newLongFill, title = "Long Filled", style = shape.labelup, location = location.belowbar, color = color.new(color.teal, 0), textcolor = color.white, size = size.tiny, text = "LONG FILLED")
 plotshape(showSignalMarkers and newShortFill, title = "Short Filled", style = shape.labeldown, location = location.abovebar, color = color.new(color.orange, 0), textcolor = color.white, size = size.tiny, text = "SHORT FILLED")
 
