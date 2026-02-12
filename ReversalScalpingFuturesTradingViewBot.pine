@@ -533,6 +533,10 @@ if pendingShort and strategy.position_size >= 0 and (not withinTradeWindow or pe
     pendingTimingBucket := 0
     pendingBar := na
 
+int trailLookback = math.max(5, math.min(20, int(math.floor(structureLookbackBars * 0.5))))
+float trailBaseLow = ta.lowest(low, trailLookback)
+float trailBaseHigh = ta.highest(high, trailLookback)
+
 // -----------------------------
 // Manage open trade (BE, scale, trail, max hold)
 // -----------------------------
@@ -556,8 +560,7 @@ if strategy.position_size > 0
         scaleOutDone := true
 
     if trailEnabled
-        int trailLookback = math.max(5, math.min(20, int(math.floor(structureLookbackBars * 0.5))))
-        float candidateTrail = trailMethod == "FixedTicks" ? (close - trailTicks * syminfo.mintick) : (ta.lowest(low, trailLookback) - trailTicks * syminfo.mintick)
+        float candidateTrail = trailMethod == "FixedTicks" ? (close - trailTicks * syminfo.mintick) : (trailBaseLow - trailTicks * syminfo.mintick)
         candidateTrail := math.min(candidateTrail, close - syminfo.mintick)
         activeStop := na(activeStop) ? candidateTrail : math.max(activeStop, candidateTrail)
 
@@ -583,8 +586,7 @@ if strategy.position_size < 0
         scaleOutDone := true
 
     if trailEnabled
-        int trailLookback = math.max(5, math.min(20, int(math.floor(structureLookbackBars * 0.5))))
-        float candidateTrail = trailMethod == "FixedTicks" ? (close + trailTicks * syminfo.mintick) : (ta.highest(high, trailLookback) + trailTicks * syminfo.mintick)
+        float candidateTrail = trailMethod == "FixedTicks" ? (close + trailTicks * syminfo.mintick) : (trailBaseHigh + trailTicks * syminfo.mintick)
         candidateTrail := math.max(candidateTrail, close + syminfo.mintick)
         activeStop := na(activeStop) ? candidateTrail : math.min(activeStop, candidateTrail)
 
@@ -608,7 +610,9 @@ if useOpenRangeFilter
 
 bool chopOK = true
 if useChopRatioFilter
-    float sumRanges = ta.sum(math.max(syminfo.mintick, high - low), chopLookbackBars)
+    float sumRanges = 0.0
+    for i = 0 to chopLookbackBars - 1
+        sumRanges += math.max(syminfo.mintick, high[i] - low[i])
     float netRange = ta.highest(high, chopLookbackBars) - ta.lowest(low, chopLookbackBars)
     float chopRatio = netRange > syminfo.mintick * 0.5 ? (sumRanges / netRange) : 1e10
     chopOK := bar_index >= chopLookbackBars + 1 and chopRatio <= maxChopRatio
