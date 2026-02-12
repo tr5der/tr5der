@@ -1,29 +1,29 @@
-//@version=4
-strategy("Bollinger Bands Strategy (Tuned + Error Fixed)", overlay=true, pyramiding=0, calc_on_order_fills=true, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=5)
+//@version=6
+strategy("Bollinger Bands Strategy (Tuned + Fixed)", overlay=true, pyramiding=0, calc_on_order_fills=true, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=5)
 
 // Presets let you quickly optimize for common markets/timeframes.
-preset = input(title="Preset", defval="Crypto 1h", options=["Crypto 15m", "Crypto 1h", "Stocks 1h", "Forex 1h", "Custom"])
-allowShorts = input(true, title="Allow Shorts")
-useBasisExit = input(true, title="Exit On Basis Cross")
-useSessionFilter = input(false, title="Use Session Filter")
-sessionInput = input("0000-2359", title="Trading Session")
+preset = input.string("Crypto 1h", "Preset", options=["Crypto 15m", "Crypto 1h", "Stocks 1h", "Forex 1h", "Custom"])
+allowShorts = input.bool(true, "Allow Shorts")
+useBasisExit = input.bool(true, "Exit On Basis Cross")
+useSessionFilter = input.bool(false, "Use Session Filter")
+sessionInput = input.session("0000-2359", "Trading Session")
 
 // Custom values (used when Preset = Custom)
-bbLengthCustom = input(20, minval=1, title="Custom BB Length")
-bbMultCustom = input(2.0, minval=0.1, maxval=10.0, step=0.1, title="Custom BB StdDev")
-emaLenCustom = input(200, minval=20, title="Custom Trend EMA Length")
-rsiLenCustom = input(14, minval=2, title="Custom RSI Length")
-rsiLongCustom = input(52, minval=1, maxval=99, title="Custom Min RSI Long")
-rsiShortCustom = input(48, minval=1, maxval=99, title="Custom Max RSI Short")
-adxLenCustom = input(14, minval=2, title="Custom ADX Length")
-adxMinCustom = input(18, minval=1, maxval=100, title="Custom Min ADX")
-atrLenCustom = input(14, minval=1, title="Custom ATR Length")
-stopAtrCustom = input(1.8, minval=0.1, step=0.1, title="Custom Stop ATR")
-takeAtrCustom = input(3.0, minval=0.1, step=0.1, title="Custom Target ATR")
-trailAtrCustom = input(1.2, minval=0.1, step=0.1, title="Custom Trail ATR")
-beTriggerCustom = input(1.0, minval=0.1, step=0.1, title="Custom Breakeven Trigger ATR")
-maxBarsCustom = input(72, minval=1, title="Custom Max Bars In Trade")
-minAtrPctCustom = input(0.25, minval=0.01, step=0.01, title="Custom Min ATR %")
+bbLengthCustom = input.int(20, "Custom BB Length", minval=1)
+bbMultCustom = input.float(2.0, "Custom BB StdDev", minval=0.1, maxval=10.0, step=0.1)
+emaLenCustom = input.int(200, "Custom Trend EMA Length", minval=20)
+rsiLenCustom = input.int(14, "Custom RSI Length", minval=2)
+rsiLongCustom = input.int(52, "Custom Min RSI Long", minval=1, maxval=99)
+rsiShortCustom = input.int(48, "Custom Max RSI Short", minval=1, maxval=99)
+adxLenCustom = input.int(14, "Custom ADX Length", minval=2)
+adxMinCustom = input.float(18.0, "Custom Min ADX", minval=1.0, maxval=100.0)
+atrLenCustom = input.int(14, "Custom ATR Length", minval=1)
+stopAtrCustom = input.float(1.8, "Custom Stop ATR", minval=0.1, step=0.1)
+takeAtrCustom = input.float(3.0, "Custom Target ATR", minval=0.1, step=0.1)
+trailAtrCustom = input.float(1.2, "Custom Trail ATR", minval=0.1, step=0.1)
+beTriggerCustom = input.float(1.0, "Custom Breakeven Trigger ATR", minval=0.1, step=0.1)
+maxBarsCustom = input.int(72, "Custom Max Bars In Trade", minval=1)
+minAtrPctCustom = input.float(0.25, "Custom Min ATR %", minval=0.01, step=0.01)
 
 // Preset mapper
 bbLength = preset == "Crypto 15m" ? 18 : preset == "Crypto 1h" ? 20 : preset == "Stocks 1h" ? 20 : preset == "Forex 1h" ? 24 : bbLengthCustom
@@ -33,7 +33,7 @@ rsiLen = preset == "Crypto 15m" ? 14 : preset == "Crypto 1h" ? 14 : preset == "S
 rsiLongMin = preset == "Crypto 15m" ? 50 : preset == "Crypto 1h" ? 52 : preset == "Stocks 1h" ? 55 : preset == "Forex 1h" ? 53 : rsiLongCustom
 rsiShortMax = preset == "Crypto 15m" ? 50 : preset == "Crypto 1h" ? 48 : preset == "Stocks 1h" ? 45 : preset == "Forex 1h" ? 47 : rsiShortCustom
 adxLen = preset == "Crypto 15m" ? 14 : preset == "Crypto 1h" ? 14 : preset == "Stocks 1h" ? 12 : preset == "Forex 1h" ? 14 : adxLenCustom
-adxMin = preset == "Crypto 15m" ? 20 : preset == "Crypto 1h" ? 18 : preset == "Stocks 1h" ? 16 : preset == "Forex 1h" ? 17 : adxMinCustom
+adxMin = preset == "Crypto 15m" ? 20.0 : preset == "Crypto 1h" ? 18.0 : preset == "Stocks 1h" ? 16.0 : preset == "Forex 1h" ? 17.0 : adxMinCustom
 atrLen = preset == "Crypto 15m" ? 14 : preset == "Crypto 1h" ? 14 : preset == "Stocks 1h" ? 12 : preset == "Forex 1h" ? 14 : atrLenCustom
 stopAtr = preset == "Crypto 15m" ? 1.6 : preset == "Crypto 1h" ? 1.8 : preset == "Stocks 1h" ? 1.5 : preset == "Forex 1h" ? 1.4 : stopAtrCustom
 takeAtr = preset == "Crypto 15m" ? 2.4 : preset == "Crypto 1h" ? 3.2 : preset == "Stocks 1h" ? 2.8 : preset == "Forex 1h" ? 2.6 : takeAtrCustom
@@ -43,15 +43,15 @@ maxBarsInTrade = preset == "Crypto 15m" ? 48 : preset == "Crypto 1h" ? 72 : pres
 minAtrPct = preset == "Crypto 15m" ? 0.35 : preset == "Crypto 1h" ? 0.25 : preset == "Stocks 1h" ? 0.18 : preset == "Forex 1h" ? 0.12 : minAtrPctCustom
 
 source = close
-basis = sma(source, bbLength)
-dev = bbMult * stdev(source, bbLength)
+basis = ta.sma(source, bbLength)
+dev = bbMult * ta.stdev(source, bbLength)
 upper = basis + dev
 lower = basis - dev
-trendEma = ema(source, emaLen)
-rsiVal = rsi(source, rsiLen)
-adxVal = adx(adxLen)
-atrVal = atr(atrLen)
-atrPct = atrVal / source * 100.0
+trendEma = ta.ema(source, emaLen)
+rsiVal = ta.rsi(source, rsiLen)
+[plusDi, minusDi, adxVal] = ta.dmi(adxLen, adxLen)
+atrVal = ta.atr(atrLen)
+atrPct = atrVal / math.max(math.abs(source), syminfo.mintick) * 100.0
 
 inSession = not useSessionFilter or not na(time(timeframe.period, sessionInput))
 volOk = atrPct >= minAtrPct
@@ -59,67 +59,67 @@ trendUp = source > trendEma and trendEma >= trendEma[1]
 trendDown = source < trendEma and trendEma <= trendEma[1]
 strengthOk = adxVal >= adxMin
 
-longSignal = inSession and volOk and strengthOk and trendUp and crossover(source, lower) and rsiVal > rsiLongMin
-shortSignal = inSession and volOk and strengthOk and trendDown and allowShorts and crossunder(source, upper) and rsiVal < rsiShortMax
+longSignal = inSession and volOk and strengthOk and trendUp and ta.crossover(source, lower) and rsiVal > rsiLongMin
+shortSignal = inSession and volOk and strengthOk and trendDown and allowShorts and ta.crossunder(source, upper) and rsiVal < rsiShortMax
 
-if (longSignal and strategy.position_size < 0)
+if longSignal and strategy.position_size < 0
     strategy.close("Short", comment="Flip Long")
-if (shortSignal and strategy.position_size > 0)
+if shortSignal and strategy.position_size > 0
     strategy.close("Long", comment="Flip Short")
 
-if (longSignal and strategy.position_size <= 0)
+if longSignal and strategy.position_size <= 0
     strategy.entry("Long", strategy.long, comment="BB Long")
-if (shortSignal and strategy.position_size >= 0)
+if shortSignal and strategy.position_size >= 0
     strategy.entry("Short", strategy.short, comment="BB Short")
 
 var float longTrail = na
 var float shortTrail = na
 var int entryBar = na
 
-if (strategy.position_size != 0 and strategy.position_size[1] == 0)
+if strategy.position_size != 0 and strategy.position_size[1] == 0
     entryBar := bar_index
-if (strategy.position_size == 0)
+if strategy.position_size == 0
     entryBar := na
 
-if (strategy.position_size > 0)
+if strategy.position_size > 0
     baseStopLong = strategy.position_avg_price - atrVal * stopAtr
     trailCandidateLong = source - atrVal * trailAtr
-    longTrail := na(longTrail) ? trailCandidateLong : max(longTrail, trailCandidateLong)
+    longTrail := na(longTrail) ? trailCandidateLong : math.max(longTrail, trailCandidateLong)
     breakevenLong = source >= strategy.position_avg_price + atrVal * beTriggerAtr ? strategy.position_avg_price : na
-    finalLongStop = max(baseStopLong, longTrail)
-    finalLongStop := na(breakevenLong) ? finalLongStop : max(finalLongStop, breakevenLong)
+    longStopNoBE = math.max(baseStopLong, longTrail)
+    finalLongStop = na(breakevenLong) ? longStopNoBE : math.max(longStopNoBE, breakevenLong)
     longTarget = strategy.position_avg_price + atrVal * takeAtr
     strategy.exit("Long Exit", from_entry="Long", stop=finalLongStop, limit=longTarget, comment="ATR Exit")
 else
     longTrail := na
 
-if (strategy.position_size < 0)
+if strategy.position_size < 0
     baseStopShort = strategy.position_avg_price + atrVal * stopAtr
     trailCandidateShort = source + atrVal * trailAtr
-    shortTrail := na(shortTrail) ? trailCandidateShort : min(shortTrail, trailCandidateShort)
+    shortTrail := na(shortTrail) ? trailCandidateShort : math.min(shortTrail, trailCandidateShort)
     breakevenShort = source <= strategy.position_avg_price - atrVal * beTriggerAtr ? strategy.position_avg_price : na
-    finalShortStop = min(baseStopShort, shortTrail)
-    finalShortStop := na(breakevenShort) ? finalShortStop : min(finalShortStop, breakevenShort)
+    shortStopNoBE = math.min(baseStopShort, shortTrail)
+    finalShortStop = na(breakevenShort) ? shortStopNoBE : math.min(shortStopNoBE, breakevenShort)
     shortTarget = strategy.position_avg_price - atrVal * takeAtr
     strategy.exit("Short Exit", from_entry="Short", stop=finalShortStop, limit=shortTarget, comment="ATR Exit")
 else
     shortTrail := na
 
 timeStop = strategy.position_size != 0 and not na(entryBar) and (bar_index - entryBar >= maxBarsInTrade)
-if (timeStop and strategy.position_size > 0)
+if timeStop and strategy.position_size > 0
     strategy.close("Long", comment="Time Stop")
-if (timeStop and strategy.position_size < 0)
+if timeStop and strategy.position_size < 0
     strategy.close("Short", comment="Time Stop")
 
-if (useBasisExit and strategy.position_size > 0 and crossunder(source, basis))
+if useBasisExit and strategy.position_size > 0 and ta.crossunder(source, basis)
     strategy.close("Long", comment="Basis Exit")
-if (useBasisExit and strategy.position_size < 0 and crossover(source, basis))
+if useBasisExit and strategy.position_size < 0 and ta.crossover(source, basis)
     strategy.close("Short", comment="Basis Exit")
 
-plot(upper, title="Upper Band", color=color.yellow, linewidth=1, style=plot.style_line, transp=10)
-plot(lower, title="Lower Band", color=color.yellow, linewidth=1, style=plot.style_line, transp=10)
-plot(basis, title="Basis", color=color.blue, linewidth=1, style=plot.style_line, transp=0)
-plot(trendEma, title="Trend EMA", color=color.orange, linewidth=1, style=plot.style_line, transp=0)
+plot(upper, title="Upper Band", color=color.new(color.yellow, 10), linewidth=1)
+plot(lower, title="Lower Band", color=color.new(color.yellow, 10), linewidth=1)
+plot(basis, title="Basis", color=color.blue, linewidth=1)
+plot(trendEma, title="Trend EMA", color=color.orange, linewidth=1)
 
 plotshape(longSignal, title="Long", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.tiny)
 plotshape(shortSignal, title="Short", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.tiny)
