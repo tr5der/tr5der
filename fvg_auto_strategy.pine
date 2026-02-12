@@ -1,12 +1,5 @@
-//@version=5
-strategy(
-     "HTF FVG -> 5M FVG -> Inversion Auto Strategy",
-     overlay=true,
-     pyramiding=0,
-     process_orders_on_close=true,
-     calc_on_order_fills=true,
-     initial_capital=10000
-)
+//@version=6
+strategy("HTF FVG -> 5M FVG -> Inversion Auto Strategy", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_order_fills=true, initial_capital=10000)
 
 // === Inputs ===
 tf_htf_1 = input.timeframe("60", "Higher Timeframe #1 (1H)")
