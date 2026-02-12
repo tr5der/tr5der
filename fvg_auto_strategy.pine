@@ -1,0 +1,377 @@
+//@version=5
+strategy(
+     "HTF FVG -> 5M FVG -> Inversion Auto Strategy",
+     overlay=true,
+     pyramiding=0,
+     process_orders_on_close=true,
+     calc_on_order_fills=true,
+     initial_capital=10000
+)
+
+// === Inputs ===
+tf_htf_1 = input.timeframe("60", "Higher Timeframe #1 (1H)")
+tf_htf_2 = input.timeframe("240", "Higher Timeframe #2 (4H)")
+tf_five = input.timeframe("5", "Step 2 timeframe")
+tf_inversion = input.timeframe("1", "Inversion timeframe (1m or 2m)")
+
+min_gap_ticks = input.int(5, "Minimum FVG size (ticks)", minval=1)
+buffer_ticks = input.int(3, "Stop buffer (ticks)", minval=2, maxval=5)
+risk_percent = input.float(1.0, "Risk % per trade", minval=0.1, step=0.1) / 100.0
+
+tp_mode = input.string("1:1", "Take-profit mode", options=["1:1", "1:2", "Swing"])
+swing_lookback = input.int(50, "Swing lookback (for Swing TP)", minval=10)
+
+use_session_filter = input.bool(true, "Only trade NY session (09:30 - 16:00 ET)")
+ny_session = input.session("0930-1600", "NY session window")
+apply_session_to_setup = input.bool(false, "Apply session filter to setup building")
+manual_news_pause = input.bool(false, "Manual news pause (optional)")
+
+// === Helpers ===
+f_gap_ticks(float upper_bound, float lower_bound) =>
+    (upper_bound - lower_bound) / syminfo.mintick
+
+f_zone_touched(float upper_bound, float lower_bound) =>
+    high >= lower_bound and low <= upper_bound
+
+in_ny_session = not na(time(timeframe.period, ny_session, "America/New_York"))
+setup_allowed = (not apply_session_to_setup) or in_ny_session
+entry_allowed = (not use_session_filter or in_ny_session) and not manual_news_pause
+
+// === Multi-timeframe data ===
+// STEP 1 sources: 1H and 4H
+htf1_time = request.security(syminfo.tickerid, tf_htf_1, time, barmerge.gaps_off, barmerge.lookahead_off)
+htf2_time = request.security(syminfo.tickerid, tf_htf_2, time, barmerge.gaps_off, barmerge.lookahead_off)
+new_htf1_bar = ta.change(htf1_time) != 0
+new_htf2_bar = ta.change(htf2_time) != 0
+
+htf1_bull = request.security(syminfo.tickerid, tf_htf_1, low[2] > high, barmerge.gaps_off, barmerge.lookahead_off)
+htf1_bear = request.security(syminfo.tickerid, tf_htf_1, high[2] < low, barmerge.gaps_off, barmerge.lookahead_off)
+htf2_bull = request.security(syminfo.tickerid, tf_htf_2, low[2] > high, barmerge.gaps_off, barmerge.lookahead_off)
+htf2_bear = request.security(syminfo.tickerid, tf_htf_2, high[2] < low, barmerge.gaps_off, barmerge.lookahead_off)
+
+htf1_bull_upper = request.security(syminfo.tickerid, tf_htf_1, low[2], barmerge.gaps_off, barmerge.lookahead_off)
+htf1_bull_lower = request.security(syminfo.tickerid, tf_htf_1, high, barmerge.gaps_off, barmerge.lookahead_off)
+htf1_bear_upper = request.security(syminfo.tickerid, tf_htf_1, low, barmerge.gaps_off, barmerge.lookahead_off)
+htf1_bear_lower = request.security(syminfo.tickerid, tf_htf_1, high[2], barmerge.gaps_off, barmerge.lookahead_off)
+
+htf2_bull_upper = request.security(syminfo.tickerid, tf_htf_2, low[2], barmerge.gaps_off, barmerge.lookahead_off)
+htf2_bull_lower = request.security(syminfo.tickerid, tf_htf_2, high, barmerge.gaps_off, barmerge.lookahead_off)
+htf2_bear_upper = request.security(syminfo.tickerid, tf_htf_2, low, barmerge.gaps_off, barmerge.lookahead_off)
+htf2_bear_lower = request.security(syminfo.tickerid, tf_htf_2, high[2], barmerge.gaps_off, barmerge.lookahead_off)
+
+// STEP 2 source: 5M
+five_time = request.security(syminfo.tickerid, tf_five, time, barmerge.gaps_off, barmerge.lookahead_off)
+new_five_bar = ta.change(five_time) != 0
+
+five_bull = request.security(syminfo.tickerid, tf_five, low[2] > high, barmerge.gaps_off, barmerge.lookahead_off)
+five_bear = request.security(syminfo.tickerid, tf_five, high[2] < low, barmerge.gaps_off, barmerge.lookahead_off)
+five_bull_upper = request.security(syminfo.tickerid, tf_five, low[2], barmerge.gaps_off, barmerge.lookahead_off)
+five_bull_lower = request.security(syminfo.tickerid, tf_five, high, barmerge.gaps_off, barmerge.lookahead_off)
+five_bear_upper = request.security(syminfo.tickerid, tf_five, low, barmerge.gaps_off, barmerge.lookahead_off)
+five_bear_lower = request.security(syminfo.tickerid, tf_five, high[2], barmerge.gaps_off, barmerge.lookahead_off)
+
+// STEP 3 source: 1M/2M
+inv_time = request.security(syminfo.tickerid, tf_inversion, time, barmerge.gaps_off, barmerge.lookahead_off)
+new_inv_bar = ta.change(inv_time) != 0
+
+inv_bull = request.security(syminfo.tickerid, tf_inversion, low[2] > high, barmerge.gaps_off, barmerge.lookahead_off)
+inv_bear = request.security(syminfo.tickerid, tf_inversion, high[2] < low, barmerge.gaps_off, barmerge.lookahead_off)
+inv_bull_upper = request.security(syminfo.tickerid, tf_inversion, low[2], barmerge.gaps_off, barmerge.lookahead_off)
+inv_bull_lower = request.security(syminfo.tickerid, tf_inversion, high, barmerge.gaps_off, barmerge.lookahead_off)
+inv_bear_upper = request.security(syminfo.tickerid, tf_inversion, low, barmerge.gaps_off, barmerge.lookahead_off)
+inv_bear_lower = request.security(syminfo.tickerid, tf_inversion, high[2], barmerge.gaps_off, barmerge.lookahead_off)
+
+// === Requested state variables ===
+var bool htf_fvg_found = false
+var bool htf_fvg_touched = false
+var bool five_min_fvg_found = false
+var bool five_min_fvg_touched = false
+var bool inversion_found = false
+var string trade_direction = "none" // "long" / "short"
+var float entry_price = na
+var float stop_loss = na
+var float take_profit = na
+var float internal_level = na
+
+// Extra state storage
+var float htf_upper = na
+var float htf_lower = na
+var int htf_created_time = na
+var string htf_source = "none"
+
+var float five_upper = na
+var float five_lower = na
+var int five_created_time = na
+
+var float inversion_upper = na
+var float inversion_lower = na
+var int inversion_created_time = na
+
+var float pre_touch_high = na
+var float pre_touch_low = na
+var float swing_low_into_five = na
+var float swing_high_into_five = na
+
+var float active_stop = na
+var float active_target = na
+var bool moved_to_be = false
+
+long_entry_signal = false
+short_entry_signal = false
+in_trade = strategy.position_size != 0
+
+if not in_trade
+    // STEP 1: Find latest valid 1H/4H FVG (minimum size + currently unfilled)
+    bool candidate_found = false
+    int candidate_dir = 0 // 1 long, -1 short
+    float candidate_upper = na
+    float candidate_lower = na
+    int candidate_time = na
+    string candidate_source = "none"
+
+    if setup_allowed and (new_htf1_bar or new_htf2_bar)
+        if new_htf1_bar and htf1_bull
+            gap_ticks_1h_bull = f_gap_ticks(htf1_bull_upper, htf1_bull_lower)
+            if htf1_bull_upper > htf1_bull_lower and gap_ticks_1h_bull >= min_gap_ticks and not f_zone_touched(htf1_bull_upper, htf1_bull_lower)
+                candidate_found := true
+                candidate_dir := 1
+                candidate_upper := htf1_bull_upper
+                candidate_lower := htf1_bull_lower
+                candidate_time := htf1_time
+                candidate_source := "1H"
+
+        if new_htf1_bar and htf1_bear
+            gap_ticks_1h_bear = f_gap_ticks(htf1_bear_upper, htf1_bear_lower)
+            if htf1_bear_upper > htf1_bear_lower and gap_ticks_1h_bear >= min_gap_ticks and not f_zone_touched(htf1_bear_upper, htf1_bear_lower)
+                if not candidate_found or htf1_time >= candidate_time
+                    candidate_found := true
+                    candidate_dir := -1
+                    candidate_upper := htf1_bear_upper
+                    candidate_lower := htf1_bear_lower
+                    candidate_time := htf1_time
+                    candidate_source := "1H"
+
+        if new_htf2_bar and htf2_bull
+            gap_ticks_4h_bull = f_gap_ticks(htf2_bull_upper, htf2_bull_lower)
+            if htf2_bull_upper > htf2_bull_lower and gap_ticks_4h_bull >= min_gap_ticks and not f_zone_touched(htf2_bull_upper, htf2_bull_lower)
+                if not candidate_found or htf2_time >= candidate_time
+                    candidate_found := true
+                    candidate_dir := 1
+                    candidate_upper := htf2_bull_upper
+                    candidate_lower := htf2_bull_lower
+                    candidate_time := htf2_time
+                    candidate_source := "4H"
+
+        if new_htf2_bar and htf2_bear
+            gap_ticks_4h_bear = f_gap_ticks(htf2_bear_upper, htf2_bear_lower)
+            if htf2_bear_upper > htf2_bear_lower and gap_ticks_4h_bear >= min_gap_ticks and not f_zone_touched(htf2_bear_upper, htf2_bear_lower)
+                if not candidate_found or htf2_time >= candidate_time
+                    candidate_found := true
+                    candidate_dir := -1
+                    candidate_upper := htf2_bear_upper
+                    candidate_lower := htf2_bear_lower
+                    candidate_time := htf2_time
+                    candidate_source := "4H"
+
+    if candidate_found and (not htf_fvg_found or (htf_fvg_found and not htf_fvg_touched))
+        htf_fvg_found := true
+        htf_fvg_touched := false
+        five_min_fvg_found := false
+        five_min_fvg_touched := false
+        inversion_found := false
+
+        trade_direction := candidate_dir == 1 ? "long" : "short"
+        htf_upper := candidate_upper
+        htf_lower := candidate_lower
+        htf_created_time := candidate_time
+        htf_source := candidate_source
+
+        five_upper := na
+        five_lower := na
+        five_created_time := na
+        inversion_upper := na
+        inversion_lower := na
+        inversion_created_time := na
+        pre_touch_high := na
+        pre_touch_low := na
+        swing_low_into_five := na
+        swing_high_into_five := na
+        internal_level := na
+
+    // STEP 2A: Wait for touch into HTF FVG
+    if htf_fvg_found and not htf_fvg_touched
+        if f_zone_touched(htf_upper, htf_lower)
+            htf_fvg_touched := true
+
+    // STEP 2B: After HTF touch, wait for same-direction 5M FVG
+    if htf_fvg_touched and not five_min_fvg_found and setup_allowed and new_five_bar
+        if trade_direction == "long" and five_bull
+            gap_ticks_5m_bull = f_gap_ticks(five_bull_upper, five_bull_lower)
+            if five_bull_upper > five_bull_lower and gap_ticks_5m_bull >= min_gap_ticks and not f_zone_touched(five_bull_upper, five_bull_lower)
+                five_min_fvg_found := true
+                five_min_fvg_touched := false
+                five_upper := five_bull_upper
+                five_lower := five_bull_lower
+                five_created_time := five_time
+                pre_touch_high := high
+                pre_touch_low := low
+                swing_low_into_five := low
+                swing_high_into_five := high
+        else if trade_direction == "short" and five_bear
+            gap_ticks_5m_bear = f_gap_ticks(five_bear_upper, five_bear_lower)
+            if five_bear_upper > five_bear_lower and gap_ticks_5m_bear >= min_gap_ticks and not f_zone_touched(five_bear_upper, five_bear_lower)
+                five_min_fvg_found := true
+                five_min_fvg_touched := false
+                five_upper := five_bear_upper
+                five_lower := five_bear_lower
+                five_created_time := five_time
+                pre_touch_high := high
+                pre_touch_low := low
+                swing_low_into_five := low
+                swing_high_into_five := high
+
+    // STEP 2C: Wait for retrace into 5M FVG
+    if five_min_fvg_found and not five_min_fvg_touched
+        prior_pre_touch_high = pre_touch_high
+        prior_pre_touch_low = pre_touch_low
+
+        pre_touch_high := na(pre_touch_high) ? high : math.max(pre_touch_high, high)
+        pre_touch_low := na(pre_touch_low) ? low : math.min(pre_touch_low, low)
+        swing_low_into_five := na(swing_low_into_five) ? low : math.min(swing_low_into_five, low)
+        swing_high_into_five := na(swing_high_into_five) ? high : math.max(swing_high_into_five, high)
+
+        if f_zone_touched(five_upper, five_lower)
+            five_min_fvg_touched := true
+            internal_level := trade_direction == "long" ? nz(prior_pre_touch_high, high) : nz(prior_pre_touch_low, low)
+
+    // STEP 3: Inversion on 1M/2M (same direction as intended trade)
+    if five_min_fvg_touched and not inversion_found and setup_allowed and new_inv_bar
+        if trade_direction == "long" and inv_bull
+            gap_ticks_inv_bull = f_gap_ticks(inv_bull_upper, inv_bull_lower)
+            if inv_bull_upper > inv_bull_lower and gap_ticks_inv_bull >= min_gap_ticks
+                inversion_found := true
+                inversion_upper := inv_bull_upper
+                inversion_lower := inv_bull_lower
+                inversion_created_time := inv_time
+        else if trade_direction == "short" and inv_bear
+            gap_ticks_inv_bear = f_gap_ticks(inv_bear_upper, inv_bear_lower)
+            if inv_bear_upper > inv_bear_lower and gap_ticks_inv_bear >= min_gap_ticks
+                inversion_found := true
+                inversion_upper := inv_bear_upper
+                inversion_lower := inv_bear_lower
+                inversion_created_time := inv_time
+
+    // Entry trigger: close above/below inversion FVG
+    long_entry_signal := inversion_found and trade_direction == "long" and close > inversion_upper and entry_allowed
+    short_entry_signal := inversion_found and trade_direction == "short" and close < inversion_lower and entry_allowed
+
+    if long_entry_signal or short_entry_signal
+        is_long = long_entry_signal
+        entry_price := close
+
+        base_stop = is_long ? swing_low_into_five : swing_high_into_five
+        stop_loss := is_long ? base_stop - (buffer_ticks * syminfo.mintick) : base_stop + (buffer_ticks * syminfo.mintick)
+
+        stop_distance = math.abs(entry_price - stop_loss)
+        risk_cash = strategy.equity * risk_percent
+        unit_risk_cash = stop_distance * syminfo.pointvalue
+        order_qty = unit_risk_cash > 0 ? risk_cash / unit_risk_cash : na
+
+        if not na(order_qty) and order_qty > 0 and stop_distance > 0
+            rr = tp_mode == "1:2" ? 2.0 : 1.0
+            rr_target = is_long ? entry_price + (stop_distance * rr) : entry_price - (stop_distance * rr)
+
+            swing_target = is_long ? ta.highest(high, swing_lookback) : ta.lowest(low, swing_lookback)
+            use_swing_target = tp_mode == "Swing" and ((is_long and swing_target > entry_price) or (not is_long and swing_target < entry_price))
+
+            take_profit := use_swing_target ? swing_target : rr_target
+            active_stop := stop_loss
+            active_target := take_profit
+            moved_to_be := false
+
+            if is_long
+                strategy.entry("Long", strategy.long, qty=order_qty)
+            else
+                strategy.entry("Short", strategy.short, qty=order_qty)
+
+            // After order placement, clear setup scan state
+            htf_fvg_found := false
+            htf_fvg_touched := false
+            five_min_fvg_found := false
+            five_min_fvg_touched := false
+            inversion_found := false
+            trade_direction := "none"
+            htf_upper := na
+            htf_lower := na
+            five_upper := na
+            five_lower := na
+            inversion_upper := na
+            inversion_lower := na
+        else
+            // Invalid sizing data, reset setup to avoid repeated bad entries
+            htf_fvg_found := false
+            htf_fvg_touched := false
+            five_min_fvg_found := false
+            five_min_fvg_touched := false
+            inversion_found := false
+            trade_direction := "none"
+            htf_upper := na
+            htf_lower := na
+            five_upper := na
+            five_lower := na
+            inversion_upper := na
+            inversion_lower := na
+            internal_level := na
+
+// === Position management ===
+if strategy.position_size > 0
+    if not moved_to_be and not na(internal_level) and high >= internal_level
+        active_stop := math.max(active_stop, strategy.position_avg_price)
+        moved_to_be := true
+    strategy.exit("Long Exit", "Long", stop=active_stop, limit=active_target)
+
+if strategy.position_size < 0
+    if not moved_to_be and not na(internal_level) and low <= internal_level
+        active_stop := math.min(active_stop, strategy.position_avg_price)
+        moved_to_be := true
+    strategy.exit("Short Exit", "Short", stop=active_stop, limit=active_target)
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    active_stop := na
+    active_target := na
+    moved_to_be := false
+    entry_price := na
+    stop_loss := na
+    take_profit := na
+    internal_level := na
+    trade_direction := "none"
+
+// === Visuals ===
+state_text = strategy.position_size != 0 ? "In Trade" :
+     inversion_found ? "Step 3: Inversion Found" :
+     five_min_fvg_touched ? "Step 3: Waiting Inversion" :
+     five_min_fvg_found ? "Step 2: Waiting 5M Retrace" :
+     htf_fvg_touched ? "Step 2: Waiting 5M FVG" :
+     htf_fvg_found ? "Step 1: Waiting HTF Touch" : "Step 1: Scanning HTF FVG"
+
+plot(htf_fvg_found and not htf_fvg_touched ? htf_upper : na, "HTF FVG Upper", color=color.new(color.blue, 0), style=plot.style_linebr, linewidth=2)
+plot(htf_fvg_found and not htf_fvg_touched ? htf_lower : na, "HTF FVG Lower", color=color.new(color.blue, 0), style=plot.style_linebr, linewidth=2)
+
+plot(five_min_fvg_found and not five_min_fvg_touched ? five_upper : na, "5M FVG Upper", color=color.new(color.teal, 0), style=plot.style_linebr, linewidth=2)
+plot(five_min_fvg_found and not five_min_fvg_touched ? five_lower : na, "5M FVG Lower", color=color.new(color.teal, 0), style=plot.style_linebr, linewidth=2)
+
+plot(inversion_found ? inversion_upper : na, "Inversion FVG Upper", color=color.new(color.orange, 0), style=plot.style_linebr, linewidth=2)
+plot(inversion_found ? inversion_lower : na, "Inversion FVG Lower", color=color.new(color.orange, 0), style=plot.style_linebr, linewidth=2)
+
+plot(strategy.position_size != 0 ? active_stop : na, "Active Stop", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size != 0 ? active_target : na, "Active Target", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size != 0 ? internal_level : na, "Break-even Trigger (Internal Level)", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=1)
+
+bgcolor(use_session_filter and not in_ny_session ? color.new(color.gray, 92) : na, title="Out-of-session shading")
+
+var table status_table = table.new(position.top_right, 1, 1)
+if barstate.islast
+    table.cell(status_table, 0, 0, "State: " + state_text, bgcolor=color.new(color.black, 0), text_color=color.white)
+
+alertcondition(long_entry_signal, title="Long Entry Trigger", message="Long entry condition met for HTF/5M FVG inversion strategy.")
+alertcondition(short_entry_signal, title="Short Entry Trigger", message="Short entry condition met for HTF/5M FVG inversion strategy.")
