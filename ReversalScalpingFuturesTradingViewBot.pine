@@ -129,12 +129,15 @@ maxHoldMinutes = input.int(0, "MaxHoldMinutes", minval = 0, maxval = 240, group 
 // -----------------------------
 const string groupRisk = "Risk"
 useFixedDollarRisk = input.bool(true, "UseFixedDollarRisk", group = groupRisk)
-riskPerTradeDollars = input.float(300.0, "RiskPerTradeDollars", minval = 1, group = groupRisk)
+riskPerTradeDollars = input.float(500.0, "RiskPerTradeDollars", minval = 1, group = groupRisk)
 minContracts = input.int(1, "MinContracts", minval = 1, maxval = 100, group = groupRisk)
 maxContracts = input.int(5, "MaxContracts", minval = 1, maxval = 100, group = groupRisk)
 baseContracts = input.int(1, "BaseContractsWhenNotRiskSized", minval = 1, maxval = 100, group = groupRisk)
 useSymbolPointValue = input.bool(true, "UseSymbolPointValue", group = groupRisk)
 pointValueOverride = input.float(50.0, "PointValueOverride", minval = 0.01, group = groupRisk)
+useHardDollarCaps = input.bool(true, "UseHardDollarCaps", group = groupRisk)
+maxProfitPerTradeDollars = input.float(2000.0, "MaxProfitPerTradeDollars", minval = 1, group = groupRisk)
+maxLossPerTradeDollars = input.float(500.0, "MaxLossPerTradeDollars", minval = 1, group = groupRisk)
 
 // -----------------------------
 // Inputs: Execution mode (trade frequency controls)
@@ -657,6 +660,17 @@ if strategy.position_size > 0
         candidateTrail := math.min(candidateTrail, close - syminfo.mintick)
         activeStop := na(activeStop) ? candidateTrail : math.max(activeStop, candidateTrail)
 
+    if useHardDollarCaps
+        float pv = useSymbolPointValue ? syminfo.pointvalue : pointValueOverride
+        float qtyAbs = math.abs(strategy.position_size)
+        if pv > 0 and qtyAbs > 0
+            float maxLossPoints = math.max(syminfo.mintick, maxLossPerTradeDollars / (qtyAbs * pv))
+            float maxProfitPoints = math.max(syminfo.mintick, maxProfitPerTradeDollars / (qtyAbs * pv))
+            float capStop = round_to_tick(strategy.position_avg_price - maxLossPoints)
+            float capTarget = round_to_tick(strategy.position_avg_price + maxProfitPoints)
+            activeStop := na(activeStop) ? capStop : math.max(activeStop, capStop)
+            activeTarget := na(activeTarget) ? capTarget : math.min(activeTarget, capTarget)
+
     strategy.exit("L-EXIT", "L", stop = activeStop, limit = activeTarget, alert_message = build_exit_message("long", "stop_or_target"))
 
 if strategy.position_size < 0
@@ -688,6 +702,17 @@ if strategy.position_size < 0
         float candidateTrail = trailMethod == "FixedTicks" ? (close + trailTicks * syminfo.mintick) : (trailBaseHigh + trailTicks * syminfo.mintick)
         candidateTrail := math.max(candidateTrail, close + syminfo.mintick)
         activeStop := na(activeStop) ? candidateTrail : math.min(activeStop, candidateTrail)
+
+    if useHardDollarCaps
+        float pv = useSymbolPointValue ? syminfo.pointvalue : pointValueOverride
+        float qtyAbs = math.abs(strategy.position_size)
+        if pv > 0 and qtyAbs > 0
+            float maxLossPoints = math.max(syminfo.mintick, maxLossPerTradeDollars / (qtyAbs * pv))
+            float maxProfitPoints = math.max(syminfo.mintick, maxProfitPerTradeDollars / (qtyAbs * pv))
+            float capStop = round_to_tick(strategy.position_avg_price + maxLossPoints)
+            float capTarget = round_to_tick(strategy.position_avg_price - maxProfitPoints)
+            activeStop := na(activeStop) ? capStop : math.min(activeStop, capStop)
+            activeTarget := na(activeTarget) ? capTarget : math.max(activeTarget, capTarget)
 
     strategy.exit("S-EXIT", "S", stop = activeStop, limit = activeTarget, alert_message = build_exit_message("short", "stop_or_target"))
 
