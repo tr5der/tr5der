@@ -1,0 +1,803 @@
+//@version=5
+strategy(
+     title = "Reversal Scalping Futures Bot (Realistic)",
+     shorttitle = "ReversalScalpBot",
+     overlay = true,
+     pyramiding = 0,
+     initial_capital = 50000,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 1,
+     commission_type = strategy.commission.cash_per_contract,
+     commission_value = 2.40,
+     slippage = 1,
+     process_orders_on_close = true,
+     calc_on_order_fills = true)
+
+// -----------------------------
+// Inputs: Timing
+// -----------------------------
+groupTiming = "Timing"
+useTiming15m = input.bool(true, "UseTiming15m", group = groupTiming)
+useTiming30m = input.bool(true, "UseTiming30m", group = groupTiming)
+useTiming90m = input.bool(false, "UseTiming90m", group = groupTiming)
+timingWindowToleranceMinutes = input.int(2, "TimingWindowToleranceMinutes", minval = 0, maxval = 10, group = groupTiming)
+
+// -----------------------------
+// Inputs: Session
+// -----------------------------
+groupSession = "Session"
+sessionTemplate = input.session("1800-1700", "SessionTemplate", group = groupSession)
+sessionTimeZone = input.string("America/New_York", "SessionTimeZone", group = groupSession)
+sessionOpenOffsetMinutes = input.int(930, "SessionOpenOffsetMinutes", minval = 0, maxval = 1440, group = groupSession)
+tradeWindowMinutesAfterOpen = input.int(60, "TradeWindowMinutesAfterOpen", minval = 1, maxval = 240, group = groupSession)
+maxTradesPerSession = input.int(1, "MaxTradesPerSession", minval = 1, maxval = 10, group = groupSession)
+oneTradePerTimingWindow = input.bool(false, "OneTradePerTimingWindow", group = groupSession)
+entryExpiryBars = input.int(3, "EntryExpiryBars", minval = 1, maxval = 20, group = groupSession)
+requireOneMinuteChart = input.bool(true, "Require1MinuteChart", group = groupSession)
+
+allowMonday = input.bool(true, "Trade Monday", group = groupSession)
+allowTuesday = input.bool(true, "Trade Tuesday", group = groupSession)
+allowWednesday = input.bool(true, "Trade Wednesday", group = groupSession)
+allowThursday = input.bool(true, "Trade Thursday", group = groupSession)
+allowFriday = input.bool(true, "Trade Friday", group = groupSession)
+
+// -----------------------------
+// Inputs: Zones
+// -----------------------------
+groupZones = "Zones"
+zoneTimeframe = input.timeframe("15", "ZoneTimeframeMinutes", group = groupZones)
+zoneLookbackDays = input.int(3, "ZoneLookbackDays", minval = 1, maxval = 10, group = groupZones)
+pivotStrength = input.int(4, "PivotStrength", minval = 2, maxval = 20, group = groupZones)
+minTouchesForZone = input.int(2, "MinTouchesForZone", minval = 1, maxval = 10, group = groupZones)
+zonePaddingTicks = input.int(8, "ZonePaddingTicks", minval = 1, maxval = 50, group = groupZones)
+zoneProximityTicks = input.int(8, "ZoneProximityTicks", minval = 1, maxval = 50, group = groupZones)
+maxZonesToTrack = input.int(10, "MaxZonesToTrack", minval = 1, maxval = 30, group = groupZones)
+usePriorDayHLC = input.bool(true, "UsePriorDayHLC", group = groupZones)
+useTodayOpenLevel = input.bool(true, "UseTodayOpenLevel", group = groupZones)
+useOvernightHL = input.bool(false, "UseOvernightHL", group = groupZones)
+useGaps = input.bool(true, "UseGaps", group = groupZones)
+minGapTicks = input.int(12, "MinGapTicks", minval = 1, maxval = 100, group = groupZones)
+
+// -----------------------------
+// Inputs: Volatility / Chop
+// -----------------------------
+groupVol = "Volatility"
+useATRFilter = input.bool(true, "UseATRFilter", group = groupVol)
+atrPeriod = input.int(14, "ATRPeriod", minval = 2, maxval = 100, group = groupVol)
+minATR = input.float(1.0, "MinATR", minval = 0.01, group = groupVol)
+useOpenRangeFilter = input.bool(true, "UseOpenRangeFilter", group = groupVol)
+openRangeMinutes = input.int(10, "OpenRangeMinutes", minval = 1, maxval = 60, group = groupVol)
+minOpenRangeTicks = input.int(12, "MinOpenRangeTicks", minval = 1, maxval = 200, group = groupVol)
+useChopRatioFilter = input.bool(true, "UseChopRatioFilter", group = groupVol)
+chopLookbackBars = input.int(20, "ChopLookbackBars", minval = 5, maxval = 200, group = groupVol)
+maxChopRatio = input.float(3.2, "MaxChopRatio", minval = 1.0, maxval = 20.0, group = groupVol)
+
+// -----------------------------
+// Inputs: Trend / Overextension
+// -----------------------------
+groupTrend = "Trend"
+requireTrendShift = input.bool(true, "RequireTrendShift", group = groupTrend)
+structureLookbackBars = input.int(30, "StructureLookbackBars", minval = 10, maxval = 200, group = groupTrend)
+useOverextensionRule = input.bool(false, "UseOverextensionRule", group = groupTrend)
+overextensionATRMultiplier = input.float(1.5, "OverextensionATRMultiplier", minval = 0.5, maxval = 10.0, group = groupTrend)
+
+// -----------------------------
+// Inputs: Patterns
+// -----------------------------
+groupPatterns = "Patterns"
+enableDoubleBottom = input.bool(true, "EnableDoubleBottom", group = groupPatterns)
+doubleBottomToleranceTicks = input.int(4, "DoubleBottomToleranceTicks", minval = 1, maxval = 20, group = groupPatterns)
+enableHigherLowBreak = input.bool(true, "EnableHigherLowBreak", group = groupPatterns)
+enableHeadAndShoulders = input.bool(true, "EnableHeadAndShoulders", group = groupPatterns)
+enableEngulfing = input.bool(true, "EnableEngulfing", group = groupPatterns)
+enableThreeLineStrike = input.bool(false, "EnableThreeLineStrike", group = groupPatterns)
+requireEngulfingOrStrongClose = input.bool(false, "RequireEngulfingOrStrongClose", group = groupPatterns)
+minReversalCandleBodyRatio = input.float(0.6, "MinReversalCandleBodyRatio", minval = 0.1, maxval = 1.0, group = groupPatterns)
+entryOffsetTicks = input.int(1, "EntryOffsetTicks", minval = 0, maxval = 10, group = groupPatterns)
+
+// -----------------------------
+// Inputs: Stops / Targets
+// -----------------------------
+groupStops = "StopsTargets"
+stopMethod = input.string("SwingExtreme", "StopMethod", options = ["SwingExtreme", "SignalBar", "FixedTicks"], group = groupStops)
+stopBufferTicks = input.int(2, "StopBufferTicks", minval = 0, maxval = 20, group = groupStops)
+fixedStopTicks = input.int(20, "FixedStopTicks", minval = 1, maxval = 100, group = groupStops)
+maxStopTicks = input.int(40, "MaxStopTicks", minval = 1, maxval = 200, group = groupStops)
+targetR = input.float(2.0, "TargetR", minval = 0.5, maxval = 10.0, group = groupStops)
+useZoneTargets = input.bool(false, "UseZoneTargets", group = groupStops)
+
+// -----------------------------
+// Inputs: Management
+// -----------------------------
+groupMgmt = "Management"
+moveToBreakEvenEnabled = input.bool(true, "MoveToBreakEvenEnabled", group = groupMgmt)
+breakEvenTriggerR = input.float(2.0, "BreakEvenTriggerR", minval = 0.5, maxval = 10.0, group = groupMgmt)
+breakEvenPlusTicks = input.int(0, "BreakEvenPlusTicks", minval = 0, maxval = 10, group = groupMgmt)
+scaleOutEnabled = input.bool(false, "ScaleOutEnabled", group = groupMgmt)
+scaleOutPercent = input.int(50, "ScaleOutPercent", minval = 1, maxval = 99, group = groupMgmt)
+scaleOutAtR = input.float(2.0, "ScaleOutAtR", minval = 0.5, maxval = 10.0, group = groupMgmt)
+trailEnabled = input.bool(false, "TrailEnabled", group = groupMgmt)
+trailMethod = input.string("Swing", "TrailMethod", options = ["Swing", "FixedTicks"], group = groupMgmt)
+trailTicks = input.int(8, "TrailTicks", minval = 1, maxval = 100, group = groupMgmt)
+maxHoldMinutes = input.int(0, "MaxHoldMinutes", minval = 0, maxval = 240, group = groupMgmt)
+
+// -----------------------------
+// Inputs: Risk / Sizing
+// -----------------------------
+groupRisk = "Risk"
+useFixedDollarRisk = input.bool(true, "UseFixedDollarRisk", group = groupRisk)
+riskPerTradeDollars = input.float(300.0, "RiskPerTradeDollars", minval = 1, group = groupRisk)
+minContracts = input.int(1, "MinContracts", minval = 1, maxval = 100, group = groupRisk)
+maxContracts = input.int(5, "MaxContracts", minval = 1, maxval = 100, group = groupRisk)
+baseContracts = input.int(1, "BaseContractsWhenNotRiskSized", minval = 1, maxval = 100, group = groupRisk)
+useSymbolPointValue = input.bool(true, "UseSymbolPointValue", group = groupRisk)
+pointValueOverride = input.float(50.0, "PointValueOverride", minval = 0.01, group = groupRisk)
+
+// -----------------------------
+// Constants / state
+// -----------------------------
+int BIAS_SUPPORT = 1
+int BIAS_RESISTANCE = -1
+int BIAS_NEUTRAL = 0
+
+var zoneLow = array.new_float()
+var zoneHigh = array.new_float()
+var zoneTouches = array.new_int()
+var zoneBias = array.new_int()
+var zoneSpecial = array.new_bool()
+var zoneTime = array.new_int()
+
+var bool sessionInitialized = false
+var bool cashOpenTriggered = false
+var int sessionStartTs = na
+var int cashOpenTs = na
+
+var float sessionHigh = na
+var float sessionLow = na
+var float sessionClose = na
+var float priorSessionHigh = na
+var float priorSessionLow = na
+var float priorSessionClose = na
+var bool hasPriorSession = false
+
+var float overnightHigh = na
+var float overnightLow = na
+var bool hasOvernightData = false
+
+var float openRangeHigh = na
+var float openRangeLow = na
+
+var int tradesThisSessionWindow = 0
+var bool usedTiming15 = false
+var bool usedTiming30 = false
+var bool usedTiming90 = false
+
+var bool pendingLong = false
+var bool pendingShort = false
+var int pendingBar = na
+var int pendingTimingBucket = 0
+var float plannedStop = na
+var float plannedTarget = na
+
+var float activeStop = na
+var float activeTarget = na
+var float initialRiskPoints = na
+var bool breakEvenMoved = false
+var bool scaleOutDone = false
+var int positionEntryTs = na
+
+// -----------------------------
+// Helpers
+// -----------------------------
+round_to_tick(float px) =>
+    math.round(px / syminfo.mintick) * syminfo.mintick
+
+is_allowed_day() =>
+    int d = dayofweek
+    (d == dayofweek.monday and allowMonday) or
+     (d == dayofweek.tuesday and allowTuesday) or
+     (d == dayofweek.wednesday and allowWednesday) or
+     (d == dayofweek.thursday and allowThursday) or
+     (d == dayofweek.friday and allowFriday)
+
+is_one_minute_ok() =>
+    not requireOneMinuteChart or (timeframe.isminutes and timeframe.multiplier == 1)
+
+strong_body(int barsAgo) =>
+    float rng = high[barsAgo] - low[barsAgo]
+    rng > 0 ? (math.abs(close[barsAgo] - open[barsAgo]) / rng) >= minReversalCandleBodyRatio : false
+
+remove_zone(int idx) =>
+    array.remove(zoneLow, idx)
+    array.remove(zoneHigh, idx)
+    array.remove(zoneTouches, idx)
+    array.remove(zoneBias, idx)
+    array.remove(zoneSpecial, idx)
+    array.remove(zoneTime, idx)
+
+trim_zone_count() =>
+    int safety = 0
+    while array.size(zoneLow) > maxZonesToTrack and safety < 100
+        int candidate = na
+        int candidateTouches = 1000000
+        int candidateTs = int(9e15)
+        for i = 0 to array.size(zoneLow) - 1
+            bool isSp = array.get(zoneSpecial, i)
+            if not isSp
+                int t = array.get(zoneTouches, i)
+                int ts = array.get(zoneTime, i)
+                bool better = t < candidateTouches or (t == candidateTouches and ts < candidateTs)
+                if na(candidate) or better
+                    candidate := i
+                    candidateTouches := t
+                    candidateTs := ts
+        if na(candidate)
+            for i = 0 to array.size(zoneLow) - 1
+                int t = array.get(zoneTouches, i)
+                int ts = array.get(zoneTime, i)
+                bool better = t < candidateTouches or (t == candidateTouches and ts < candidateTs)
+                if na(candidate) or better
+                    candidate := i
+                    candidateTouches := t
+                    candidateTs := ts
+        if not na(candidate)
+            remove_zone(candidate)
+        safety += 1
+
+add_or_merge_zone(float price, int bias, bool isSpecial, int ts) =>
+    if not na(price)
+        float padding = zonePaddingTicks * syminfo.mintick
+        int matchIdx = na
+        if array.size(zoneLow) > 0
+            for i = 0 to array.size(zoneLow) - 1
+                float center = (array.get(zoneLow, i) + array.get(zoneHigh, i)) * 0.5
+                if math.abs(center - price) <= padding
+                    matchIdx := i
+                    break
+
+        if na(matchIdx)
+            array.push(zoneLow, price - padding)
+            array.push(zoneHigh, price + padding)
+            array.push(zoneTouches, isSpecial ? math.max(1, minTouchesForZone) : 1)
+            array.push(zoneBias, bias)
+            array.push(zoneSpecial, isSpecial)
+            array.push(zoneTime, ts)
+        else
+            float newLow = math.min(array.get(zoneLow, matchIdx), price - padding)
+            float newHigh = math.max(array.get(zoneHigh, matchIdx), price + padding)
+            int oldTouches = array.get(zoneTouches, matchIdx)
+            int newTouches = isSpecial ? math.max(oldTouches, minTouchesForZone) : oldTouches + 1
+            int oldBias = array.get(zoneBias, matchIdx)
+            int mergedBias = oldBias == bias ? oldBias : BIAS_NEUTRAL
+            bool mergedSpecial = array.get(zoneSpecial, matchIdx) or isSpecial
+
+            array.set(zoneLow, matchIdx, newLow)
+            array.set(zoneHigh, matchIdx, newHigh)
+            array.set(zoneTouches, matchIdx, newTouches)
+            array.set(zoneBias, matchIdx, mergedBias)
+            array.set(zoneSpecial, matchIdx, mergedSpecial)
+            array.set(zoneTime, matchIdx, ts)
+
+        trim_zone_count()
+
+prune_old_zones(int referenceTs) =>
+    int cutoff = referenceTs - zoneLookbackDays * 86400000
+    if array.size(zoneLow) > 0
+        for i = array.size(zoneLow) - 1 to 0 by -1
+            bool isSp = array.get(zoneSpecial, i)
+            int zt = array.get(zoneTime, i)
+            if not isSp and zt < cutoff
+                remove_zone(i)
+    trim_zone_count()
+
+zone_active(int i) =>
+    array.get(zoneSpecial, i) or array.get(zoneTouches, i) >= minTouchesForZone
+
+distance_to_zone_ticks(float px, float zLow, float zHigh) =>
+    px >= zLow and px <= zHigh ? 0.0 : (px < zLow ? (zLow - px) / syminfo.mintick : (px - zHigh) / syminfo.mintick)
+
+nearest_zone(bool forLong, float px) =>
+    float nearestDist = 1e10
+    int nearestIdx = na
+    if array.size(zoneLow) > 0
+        for i = 0 to array.size(zoneLow) - 1
+            if zone_active(i)
+                int b = array.get(zoneBias, i)
+                bool biasOk = forLong ? b != BIAS_RESISTANCE : b != BIAS_SUPPORT
+                if biasOk
+                    float d = distance_to_zone_ticks(px, array.get(zoneLow, i), array.get(zoneHigh, i))
+                    if d < nearestDist
+                        nearestDist := d
+                        nearestIdx := i
+    bool ok = not na(nearestIdx) and nearestDist <= zoneProximityTicks
+    [ok, nearestDist, nz(nearestIdx, -1)]
+
+find_zone_target(bool forLong, float entryPx) =>
+    float best = na
+    if array.size(zoneLow) > 0
+        for i = 0 to array.size(zoneLow) - 1
+            if zone_active(i)
+                int b = array.get(zoneBias, i)
+                if forLong
+                    if b != BIAS_SUPPORT
+                        float level = array.get(zoneLow, i)
+                        if level > entryPx + syminfo.mintick
+                            best := na(best) ? level : math.min(best, level)
+                else
+                    if b != BIAS_RESISTANCE
+                        float level = array.get(zoneHigh, i)
+                        if level < entryPx - syminfo.mintick
+                            best := na(best) ? level : math.max(best, level)
+    best
+
+active_timing_bucket(float elapsedMinutes) =>
+    int bucket = 0
+    float bestDelta = 1e10
+    if useTiming15m
+        float d = math.abs(elapsedMinutes - 15.0)
+        if d <= timingWindowToleranceMinutes and d < bestDelta
+            bucket := 15
+            bestDelta := d
+    if useTiming30m
+        float d = math.abs(elapsedMinutes - 30.0)
+        if d <= timingWindowToleranceMinutes and d < bestDelta
+            bucket := 30
+            bestDelta := d
+    if useTiming90m
+        float d = math.abs(elapsedMinutes - 90.0)
+        if d <= timingWindowToleranceMinutes and d < bestDelta
+            bucket := 90
+            bestDelta := d
+    bucket
+
+timing_bucket_used(int bucket) =>
+    bucket == 15 ? usedTiming15 : bucket == 30 ? usedTiming30 : bucket == 90 ? usedTiming90 : false
+
+mark_timing_bucket_used(int bucket) =>
+    if bucket == 15
+        usedTiming15 := true
+    else if bucket == 30
+        usedTiming30 := true
+    else if bucket == 90
+        usedTiming90 := true
+
+calc_contracts(float entryPx, float stopPx, float pointValue) =>
+    int maxC = math.max(1, maxContracts)
+    int minC = math.max(1, minContracts)
+    if not useFixedDollarRisk
+        int q = math.max(minC, baseContracts)
+        math.min(maxC, q)
+    else
+        float riskPerContract = math.abs(entryPx - stopPx) * pointValue
+        if riskPerContract <= 0
+            0
+        else
+            int c = int(math.floor(riskPerTradeDollars / riskPerContract))
+            c := math.min(maxC, c)
+            c < minC ? 0 : c
+
+build_entry_message(string side, int qty, float entryPx, float stopPx, float targetPx, int bucket) =>
+    "{" +
+     "\"event\":\"entry\"," +
+     "\"bot\":\"ReversalScalpTV\"," +
+     "\"ticker\":\"" + syminfo.ticker + "\"," +
+     "\"side\":\"" + side + "\"," +
+     "\"qty\":" + str.tostring(qty) + "," +
+     "\"entry\":" + str.tostring(entryPx) + "," +
+     "\"stop\":" + str.tostring(stopPx) + "," +
+     "\"target\":" + str.tostring(targetPx) + "," +
+     "\"timing\":" + str.tostring(bucket) +
+     "}"
+
+build_exit_message(string side, string reason) =>
+    "{" +
+     "\"event\":\"exit\"," +
+     "\"bot\":\"ReversalScalpTV\"," +
+     "\"ticker\":\"" + syminfo.ticker + "\"," +
+     "\"side\":\"" + side + "\"," +
+     "\"reason\":\"" + reason + "\"" +
+     "}"
+
+// -----------------------------
+// Session tracking
+// -----------------------------
+bool inTemplateSession = not na(time(timeframe.period, sessionTemplate, sessionTimeZone))
+bool newTemplateSession = inTemplateSession and not inTemplateSession[1]
+
+if newTemplateSession
+    if sessionInitialized
+        priorSessionHigh := sessionHigh
+        priorSessionLow := sessionLow
+        priorSessionClose := sessionClose
+        hasPriorSession := not na(priorSessionHigh) and not na(priorSessionLow) and not na(priorSessionClose)
+
+    sessionInitialized := true
+    sessionStartTs := time
+    cashOpenTs := sessionStartTs + sessionOpenOffsetMinutes * 60000
+    cashOpenTriggered := false
+
+    sessionHigh := high
+    sessionLow := low
+    sessionClose := close
+
+    overnightHigh := na
+    overnightLow := na
+    hasOvernightData := false
+
+    strategy.cancel("L")
+    strategy.cancel("S")
+    pendingLong := false
+    pendingShort := false
+    pendingTimingBucket := 0
+    pendingBar := na
+
+if inTemplateSession and not newTemplateSession
+    sessionHigh := na(sessionHigh) ? high : math.max(sessionHigh, high)
+    sessionLow := na(sessionLow) ? low : math.min(sessionLow, low)
+    sessionClose := close
+
+if inTemplateSession and not cashOpenTriggered and not na(cashOpenTs)
+    if time < cashOpenTs and sessionOpenOffsetMinutes > 0
+        overnightHigh := na(overnightHigh) ? high : math.max(overnightHigh, high)
+        overnightLow := na(overnightLow) ? low : math.min(overnightLow, low)
+        hasOvernightData := true
+
+    if time >= cashOpenTs
+        cashOpenTriggered := true
+        tradesThisSessionWindow := 0
+        usedTiming15 := false
+        usedTiming30 := false
+        usedTiming90 := false
+        openRangeHigh := high
+        openRangeLow := low
+
+        if useTodayOpenLevel
+            add_or_merge_zone(open, BIAS_NEUTRAL, true, time)
+
+        if usePriorDayHLC and hasPriorSession
+            add_or_merge_zone(priorSessionHigh, BIAS_RESISTANCE, true, time)
+            add_or_merge_zone(priorSessionLow, BIAS_SUPPORT, true, time)
+            add_or_merge_zone(priorSessionClose, BIAS_NEUTRAL, true, time)
+
+        if useOvernightHL and hasOvernightData
+            add_or_merge_zone(overnightHigh, BIAS_RESISTANCE, true, time)
+            add_or_merge_zone(overnightLow, BIAS_SUPPORT, true, time)
+
+        if useGaps and hasPriorSession
+            float gapTicks = math.abs(open - priorSessionClose) / syminfo.mintick
+            if gapTicks >= minGapTicks
+                add_or_merge_zone(priorSessionClose, BIAS_NEUTRAL, true, time)
+                add_or_merge_zone(open, BIAS_NEUTRAL, true, time)
+
+        prune_old_zones(time)
+
+float minutesFromOpen = cashOpenTriggered and not na(cashOpenTs) ? (time - cashOpenTs) / 60000.0 : na
+bool withinTradeWindow = cashOpenTriggered and minutesFromOpen >= 0 and minutesFromOpen <= tradeWindowMinutesAfterOpen
+
+if cashOpenTriggered and useOpenRangeFilter and not na(minutesFromOpen) and minutesFromOpen <= openRangeMinutes
+    openRangeHigh := na(openRangeHigh) ? high : math.max(openRangeHigh, high)
+    openRangeLow := na(openRangeLow) ? low : math.min(openRangeLow, low)
+
+// -----------------------------
+// Zone updates from higher timeframe pivots
+// -----------------------------
+float htfPivotHigh = request.security(syminfo.tickerid, zoneTimeframe, ta.pivothigh(high, pivotStrength, pivotStrength), lookahead = barmerge.lookahead_off)
+float htfPivotLow = request.security(syminfo.tickerid, zoneTimeframe, ta.pivotlow(low, pivotStrength, pivotStrength), lookahead = barmerge.lookahead_off)
+bool newZoneTfBar = ta.change(time(zoneTimeframe)) != 0
+
+if newZoneTfBar
+    if not na(htfPivotHigh)
+        add_or_merge_zone(htfPivotHigh, BIAS_RESISTANCE, false, time)
+    if not na(htfPivotLow)
+        add_or_merge_zone(htfPivotLow, BIAS_SUPPORT, false, time)
+    prune_old_zones(time)
+
+// -----------------------------
+// Position/Order transitions
+// -----------------------------
+bool newLongFill = strategy.position_size > 0 and strategy.position_size[1] <= 0
+bool newShortFill = strategy.position_size < 0 and strategy.position_size[1] >= 0
+bool justFlat = strategy.position_size == 0 and strategy.position_size[1] != 0
+
+if newLongFill or newShortFill
+    tradesThisSessionWindow += 1
+    mark_timing_bucket_used(pendingTimingBucket)
+    pendingTimingBucket := 0
+    pendingLong := false
+    pendingShort := false
+    pendingBar := na
+    breakEvenMoved := false
+    scaleOutDone := false
+    positionEntryTs := time
+
+    activeStop := plannedStop
+    activeTarget := plannedTarget
+    initialRiskPoints := math.max(syminfo.mintick, math.abs(strategy.position_avg_price - activeStop))
+
+if justFlat
+    activeStop := na
+    activeTarget := na
+    initialRiskPoints := na
+    breakEvenMoved := false
+    scaleOutDone := false
+    positionEntryTs := na
+
+bool pendingOrderExists = pendingLong or pendingShort
+bool pendingExpired = pendingOrderExists and not na(pendingBar) and (bar_index - pendingBar >= entryExpiryBars)
+
+if pendingLong and strategy.position_size <= 0 and (not withinTradeWindow or pendingExpired)
+    strategy.cancel("L")
+    pendingLong := false
+    pendingTimingBucket := 0
+    pendingBar := na
+
+if pendingShort and strategy.position_size >= 0 and (not withinTradeWindow or pendingExpired)
+    strategy.cancel("S")
+    pendingShort := false
+    pendingTimingBucket := 0
+    pendingBar := na
+
+// -----------------------------
+// Manage open trade (BE, scale, trail, max hold)
+// -----------------------------
+if strategy.position_size > 0
+    if na(initialRiskPoints) or initialRiskPoints <= 0
+        initialRiskPoints := math.max(syminfo.mintick, math.abs(strategy.position_avg_price - activeStop))
+
+    float currentR = (close - strategy.position_avg_price) / initialRiskPoints
+
+    if maxHoldMinutes > 0 and not na(positionEntryTs) and time >= positionEntryTs + maxHoldMinutes * 60000
+        strategy.close("L", comment = "TIME_EXIT_LONG", alert_message = build_exit_message("long", "time"))
+
+    if moveToBreakEvenEnabled and not breakEvenMoved and currentR >= breakEvenTriggerR
+        float beStop = strategy.position_avg_price + breakEvenPlusTicks * syminfo.mintick
+        beStop := math.min(beStop, close - syminfo.mintick)
+        activeStop := na(activeStop) ? beStop : math.max(activeStop, beStop)
+        breakEvenMoved := true
+
+    if scaleOutEnabled and not scaleOutDone and currentR >= scaleOutAtR and math.abs(strategy.position_size) > 1
+        strategy.close("L", qty_percent = scaleOutPercent, comment = "SCALE_OUT_LONG", alert_message = build_exit_message("long", "scale_out"))
+        scaleOutDone := true
+
+    if trailEnabled
+        int trailLookback = math.max(5, math.min(20, int(math.floor(structureLookbackBars * 0.5))))
+        float candidateTrail = trailMethod == "FixedTicks" ? (close - trailTicks * syminfo.mintick) : (ta.lowest(low, trailLookback) - trailTicks * syminfo.mintick)
+        candidateTrail := math.min(candidateTrail, close - syminfo.mintick)
+        activeStop := na(activeStop) ? candidateTrail : math.max(activeStop, candidateTrail)
+
+    strategy.exit("L-EXIT", "L", stop = activeStop, limit = activeTarget, alert_message = build_exit_message("long", "stop_or_target"))
+
+if strategy.position_size < 0
+    if na(initialRiskPoints) or initialRiskPoints <= 0
+        initialRiskPoints := math.max(syminfo.mintick, math.abs(strategy.position_avg_price - activeStop))
+
+    float currentR = (strategy.position_avg_price - close) / initialRiskPoints
+
+    if maxHoldMinutes > 0 and not na(positionEntryTs) and time >= positionEntryTs + maxHoldMinutes * 60000
+        strategy.close("S", comment = "TIME_EXIT_SHORT", alert_message = build_exit_message("short", "time"))
+
+    if moveToBreakEvenEnabled and not breakEvenMoved and currentR >= breakEvenTriggerR
+        float beStop = strategy.position_avg_price - breakEvenPlusTicks * syminfo.mintick
+        beStop := math.max(beStop, close + syminfo.mintick)
+        activeStop := na(activeStop) ? beStop : math.min(activeStop, beStop)
+        breakEvenMoved := true
+
+    if scaleOutEnabled and not scaleOutDone and currentR >= scaleOutAtR and math.abs(strategy.position_size) > 1
+        strategy.close("S", qty_percent = scaleOutPercent, comment = "SCALE_OUT_SHORT", alert_message = build_exit_message("short", "scale_out"))
+        scaleOutDone := true
+
+    if trailEnabled
+        int trailLookback = math.max(5, math.min(20, int(math.floor(structureLookbackBars * 0.5))))
+        float candidateTrail = trailMethod == "FixedTicks" ? (close + trailTicks * syminfo.mintick) : (ta.highest(high, trailLookback) + trailTicks * syminfo.mintick)
+        candidateTrail := math.max(candidateTrail, close + syminfo.mintick)
+        activeStop := na(activeStop) ? candidateTrail : math.min(activeStop, candidateTrail)
+
+    strategy.exit("S-EXIT", "S", stop = activeStop, limit = activeTarget, alert_message = build_exit_message("short", "stop_or_target"))
+
+// -----------------------------
+// Entry logic
+// -----------------------------
+int minimumBars = math.max(structureLookbackBars + 5, math.max(chopLookbackBars + 5, atrPeriod + 5))
+bool hasEnoughBars = bar_index >= minimumBars
+bool timeFrameOk = is_one_minute_ok()
+bool dayOk = is_allowed_day()
+
+float atrNow = ta.atr(atrPeriod)
+bool atrOK = not useATRFilter or (bar_index >= atrPeriod + 1 and atrNow >= minATR)
+
+bool openRangeOK = true
+if useOpenRangeFilter
+    float openRangeTicks = na(openRangeHigh) or na(openRangeLow) ? 0.0 : (openRangeHigh - openRangeLow) / syminfo.mintick
+    openRangeOK := not na(minutesFromOpen) and minutesFromOpen >= openRangeMinutes and openRangeTicks >= minOpenRangeTicks
+
+bool chopOK = true
+if useChopRatioFilter
+    float sumRanges = ta.sum(math.max(syminfo.mintick, high - low), chopLookbackBars)
+    float netRange = ta.highest(high, chopLookbackBars) - ta.lowest(low, chopLookbackBars)
+    float chopRatio = netRange > syminfo.mintick * 0.5 ? (sumRanges / netRange) : 1e10
+    chopOK := bar_index >= chopLookbackBars + 1 and chopRatio <= maxChopRatio
+
+bool volatilityOK = atrOK and openRangeOK and chopOK
+
+int timingBucket = not na(minutesFromOpen) ? active_timing_bucket(minutesFromOpen) : 0
+bool timingOK = timingBucket != 0
+bool timingAvailable = not oneTradePerTimingWindow or not timing_bucket_used(timingBucket)
+bool tradeSlotsOK = tradesThisSessionWindow < maxTradesPerSession
+
+float pl = ta.pivotlow(low, 2, 2)
+float ph = ta.pivothigh(high, 2, 2)
+
+float recentPivotLow = ta.valuewhen(not na(pl), pl, 0)
+float prevPivotLow = ta.valuewhen(not na(pl), pl, 1)
+float recentPivotHigh = ta.valuewhen(not na(ph), ph, 0)
+float prevPivotHigh = ta.valuewhen(not na(ph), ph, 1)
+
+bool hasTwoPivotLows = not na(recentPivotLow) and not na(prevPivotLow)
+bool hasTwoPivotHighs = not na(recentPivotHigh) and not na(prevPivotHigh)
+
+bool downContext = bar_index > structureLookbackBars and close < close[structureLookbackBars]
+bool upContext = bar_index > structureLookbackBars and close > close[structureLookbackBars]
+
+bool overextendedLong = not useOverextensionRule or ((ta.highest(high, structureLookbackBars) - low) >= overextensionATRMultiplier * atrNow)
+bool overextendedShort = not useOverextensionRule or ((high - ta.lowest(low, structureLookbackBars)) >= overextensionATRMultiplier * atrNow)
+
+bool bullishShift = hasTwoPivotLows and not na(recentPivotHigh) ? (recentPivotLow > prevPivotLow and close > recentPivotHigh) : (close > close[1] and close[1] > close[2])
+bool bearishShift = hasTwoPivotHighs and not na(recentPivotLow) ? (recentPivotHigh < prevPivotHigh and close < recentPivotLow) : (close < close[1] and close[1] < close[2])
+
+bool longTrendOK = downContext and overextendedLong and (not requireTrendShift or bullishShift)
+bool shortTrendOK = upContext and overextendedShort and (not requireTrendShift or bearishShift)
+
+[longZoneOK, longDistTicks, longZoneIdx] = nearest_zone(true, close)
+[shortZoneOK, shortDistTicks, shortZoneIdx] = nearest_zone(false, close)
+
+float pointValue = useSymbolPointValue ? syminfo.pointvalue : pointValueOverride
+
+bool canEvaluateEntry = strategy.position_size == 0 and not pendingOrderExists and pendingTimingBucket == 0 and withinTradeWindow and hasEnoughBars and timeFrameOk and dayOk and tradeSlotsOK and timingOK and timingAvailable and volatilityOK
+
+if canEvaluateEntry
+    // ---- Long pattern stack ----
+    bool longSignal = false
+    bool longEngulfingSignal = false
+    float longTrigger = na
+    float longAnchor = na
+
+    bool dblBottom = hasTwoPivotLows and math.abs(recentPivotLow - prevPivotLow) <= doubleBottomToleranceTicks * syminfo.mintick and not na(recentPivotHigh) and close > recentPivotHigh
+    bool higherLowBreak = hasTwoPivotLows and recentPivotLow > prevPivotLow + syminfo.mintick * 0.25 and not na(recentPivotHigh) and close > recentPivotHigh
+
+    bool bullEngulf = close > open and close[1] < open[1] and open <= close[1] and close >= open[1] and strong_body(0)
+    bool bullTLS = bar_index >= 4 and close[3] < open[3] and close[2] < open[2] and close[1] < open[1] and close[2] < close[3] and close[1] < close[2] and close > open and open <= close[1] and close >= open[3] and strong_body(0)
+    bool bullFlushFlip = bar_index >= 3 and close[2] < open[2] and strong_body(2) and close[1] > open[1] and close > open and strong_body(1) and strong_body(0) and close > high[2]
+
+    if enableHigherLowBreak and higherLowBreak
+        longSignal := true
+        longTrigger := math.max(high, recentPivotHigh)
+        longAnchor := recentPivotLow
+    else if enableDoubleBottom and dblBottom
+        longSignal := true
+        longTrigger := math.max(high, recentPivotHigh)
+        longAnchor := math.min(recentPivotLow, prevPivotLow)
+    else if enableEngulfing and bullEngulf
+        longSignal := true
+        longEngulfingSignal := true
+        longTrigger := high
+        longAnchor := math.min(low, low[1])
+    else if enableThreeLineStrike and bullTLS
+        longSignal := true
+        longTrigger := high
+        longAnchor := math.min(math.min(low, low[1]), math.min(low[2], low[3]))
+    else if bullFlushFlip
+        longSignal := true
+        longTrigger := high
+        longAnchor := math.min(math.min(low, low[1]), low[2])
+
+    bool longSignalStrengthOK = not requireEngulfingOrStrongClose or longEngulfingSignal or strong_body(0) or (close > open and close >= high[1])
+
+    bool longPlanReady = false
+    int longQty = 0
+    float longEntry = na
+    float longStop = na
+    float longTarget = na
+
+    if longZoneOK and longTrendOK and longSignal and longSignalStrengthOK
+        longEntry := round_to_tick(longTrigger + entryOffsetTicks * syminfo.mintick)
+        int swingLookback = math.max(6, math.min(30, structureLookbackBars))
+        float stopRawLong = stopMethod == "FixedTicks" ? (longEntry - fixedStopTicks * syminfo.mintick) : stopMethod == "SignalBar" ? (longAnchor - stopBufferTicks * syminfo.mintick) : (math.min(longAnchor, ta.lowest(low, swingLookback)) - stopBufferTicks * syminfo.mintick)
+        longStop := round_to_tick(stopRawLong)
+        float stopTicksLong = (longEntry - longStop) / syminfo.mintick
+
+        if longStop < longEntry and stopTicksLong > 0 and stopTicksLong <= maxStopTicks
+            longQty := calc_contracts(longEntry, longStop, pointValue)
+            if longQty > 0
+                float rrTarget = longEntry + (longEntry - longStop) * targetR
+                if useZoneTargets
+                    float zoneTarget = find_zone_target(true, longEntry)
+                    rrTarget := na(zoneTarget) ? rrTarget : math.min(rrTarget, zoneTarget)
+                longTarget := round_to_tick(rrTarget)
+                longPlanReady := longTarget > longEntry + syminfo.mintick
+
+    // ---- Short pattern stack ----
+    bool shortSignal = false
+    bool shortEngulfingSignal = false
+    float shortTrigger = na
+    float shortAnchor = na
+
+    bool lowerHighBreak = hasTwoPivotHighs and recentPivotHigh < prevPivotHigh - syminfo.mintick * 0.25 and not na(recentPivotLow) and close < recentPivotLow
+    bool bearEngulf = close < open and close[1] > open[1] and open >= close[1] and close <= open[1] and strong_body(0)
+    bool bearTLS = bar_index >= 4 and close[3] > open[3] and close[2] > open[2] and close[1] > open[1] and close[2] > close[3] and close[1] > close[2] and close < open and open >= close[1] and close <= open[3] and strong_body(0)
+    bool bearFlushFlip = bar_index >= 3 and close[2] > open[2] and strong_body(2) and close[1] < open[1] and close < open and strong_body(1) and strong_body(0) and close < low[2]
+
+    if enableHeadAndShoulders and lowerHighBreak
+        shortSignal := true
+        shortTrigger := math.min(low, recentPivotLow)
+        shortAnchor := math.max(recentPivotHigh, prevPivotHigh)
+    else if enableEngulfing and bearEngulf
+        shortSignal := true
+        shortEngulfingSignal := true
+        shortTrigger := low
+        shortAnchor := math.max(high, high[1])
+    else if enableThreeLineStrike and bearTLS
+        shortSignal := true
+        shortTrigger := low
+        shortAnchor := math.max(math.max(high, high[1]), math.max(high[2], high[3]))
+    else if bearFlushFlip
+        shortSignal := true
+        shortTrigger := low
+        shortAnchor := math.max(math.max(high, high[1]), high[2])
+
+    bool shortSignalStrengthOK = not requireEngulfingOrStrongClose or shortEngulfingSignal or strong_body(0) or (close < open and close <= low[1])
+
+    bool shortPlanReady = false
+    int shortQty = 0
+    float shortEntry = na
+    float shortStop = na
+    float shortTarget = na
+
+    if shortZoneOK and shortTrendOK and shortSignal and shortSignalStrengthOK
+        shortEntry := round_to_tick(shortTrigger - entryOffsetTicks * syminfo.mintick)
+        int swingLookback = math.max(6, math.min(30, structureLookbackBars))
+        float stopRawShort = stopMethod == "FixedTicks" ? (shortEntry + fixedStopTicks * syminfo.mintick) : stopMethod == "SignalBar" ? (shortAnchor + stopBufferTicks * syminfo.mintick) : (math.max(shortAnchor, ta.highest(high, swingLookback)) + stopBufferTicks * syminfo.mintick)
+        shortStop := round_to_tick(stopRawShort)
+        float stopTicksShort = (shortStop - shortEntry) / syminfo.mintick
+
+        if shortStop > shortEntry and stopTicksShort > 0 and stopTicksShort <= maxStopTicks
+            shortQty := calc_contracts(shortEntry, shortStop, pointValue)
+            if shortQty > 0
+                float rrTarget = shortEntry - (shortStop - shortEntry) * targetR
+                if useZoneTargets
+                    float zoneTarget = find_zone_target(false, shortEntry)
+                    rrTarget := na(zoneTarget) ? rrTarget : math.max(rrTarget, zoneTarget)
+                shortTarget := round_to_tick(rrTarget)
+                shortPlanReady := shortTarget < shortEntry - syminfo.mintick
+
+    // If both plans are valid, prefer the side closer to its zone.
+    if longPlanReady and shortPlanReady
+        if longDistTicks <= shortDistTicks
+            shortPlanReady := false
+        else
+            longPlanReady := false
+
+    if longPlanReady
+        strategy.entry("L", strategy.long, qty = longQty, stop = longEntry, alert_message = build_entry_message("long", longQty, longEntry, longStop, longTarget, timingBucket))
+        plannedStop := longStop
+        plannedTarget := longTarget
+        pendingLong := true
+        pendingShort := false
+        pendingTimingBucket := timingBucket
+        pendingBar := bar_index
+
+    else if shortPlanReady
+        strategy.entry("S", strategy.short, qty = shortQty, stop = shortEntry, alert_message = build_entry_message("short", shortQty, shortEntry, shortStop, shortTarget, timingBucket))
+        plannedStop := shortStop
+        plannedTarget := shortTarget
+        pendingShort := true
+        pendingLong := false
+        pendingTimingBucket := timingBucket
+        pendingBar := bar_index
+
+// -----------------------------
+// Visual aids
+// -----------------------------
+plot(strategy.position_size != 0 ? activeStop : na, "Active Stop", color = color.new(color.red, 0), linewidth = 2, style = plot.style_linebr)
+plot(strategy.position_size != 0 ? activeTarget : na, "Active Target", color = color.new(color.green, 0), linewidth = 2, style = plot.style_linebr)
+plot(cashOpenTriggered ? minutesFromOpen : na, "MinutesFromOpen", color = color.new(color.blue, 70), display = display.none)
+
