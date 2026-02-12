@@ -13,17 +13,17 @@ risk_percent = input.float(1.0, "Risk % per trade", minval=0.1, step=0.1) / 100.
 tp_mode = input.string("1:1", "Take-profit mode", options=["1:1", "1:2", "Swing"])
 swing_lookback = input.int(50, "Swing lookback (Swing TP)", minval=10)
 
-use_session_filter = input.bool(true, "Only trade NY session (09:30 - 16:00 ET)")
+use_session_filter = input.bool(false, "Only trade NY session (09:30 - 16:00 ET)")
 ny_session = input.session("0930-1600", "NY session window")
 apply_session_to_setup = input.bool(false, "Apply session filter to setup building")
 manual_news_pause = input.bool(false, "Manual news pause (optional)")
 
 allow_htf_override = input.bool(false, "Allow newer HTF FVG to replace active setup")
-max_wait_htf_touch_bars = input.int(2000, "Max bars waiting HTF touch", minval=50)
-max_wait_five_fvg_bars = input.int(1200, "Max bars waiting 5m FVG after HTF touch", minval=20)
-max_wait_five_retrace_bars = input.int(600, "Max bars waiting retrace into 5m FVG", minval=10)
-max_wait_inversion_bars = input.int(600, "Max bars waiting inversion after 5m touch", minval=10)
-max_wait_entry_bars = input.int(300, "Max bars waiting entry after inversion", minval=5)
+max_wait_htf_touch_bars = input.int(400, "Max bars waiting HTF touch", minval=50)
+max_wait_five_fvg_bars = input.int(240, "Max bars waiting 5m FVG after HTF touch", minval=20)
+max_wait_five_retrace_bars = input.int(180, "Max bars waiting retrace into 5m FVG", minval=10)
+max_wait_inversion_bars = input.int(180, "Max bars waiting inversion after 5m touch", minval=10)
+max_wait_entry_bars = input.int(120, "Max bars waiting entry after inversion", minval=5)
 
 round_qty_to_whole = input.bool(true, "Round quantity down to whole units")
 min_order_qty = input.float(1.0, "Minimum order quantity", minval=0.0, step=0.01)
