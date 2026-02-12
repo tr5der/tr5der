@@ -149,6 +149,9 @@ enableFallbackPattern = input.bool(true, "EnableFallbackPattern", group = groupE
 enforceMaxStopFilter = input.bool(false, "EnforceMaxStopFilter", group = groupExec)
 forceMinQtyWhenRiskTooSmall = input.bool(true, "ForceMinQtyWhenRiskTooSmall", group = groupExec)
 minBarsBetweenEntries = input.int(3, "MinBarsBetweenEntries", minval = 0, maxval = 100, group = groupExec)
+showSignalMarkers = input.bool(true, "ShowSignalMarkers", group = groupExec)
+showRawPatternMarkers = input.bool(true, "ShowRawPatternMarkers", group = groupExec)
+showPendingEntryLine = input.bool(true, "ShowPendingEntryLine", group = groupExec)
 
 // -----------------------------
 // Constants / state
@@ -203,6 +206,7 @@ var bool breakEvenMoved = false
 var bool scaleOutDone = false
 var int positionEntryTs = na
 var int lastFillBar = na
+var float plannedEntry = na
 
 // -----------------------------
 // Helpers
@@ -442,6 +446,7 @@ if newTemplateSession
     pendingShort := false
     pendingTimingBucket := 0
     pendingBar := na
+    plannedEntry := na
 
 if inTemplateSession and not newTemplateSession
     sessionHigh := na(sessionHigh) ? high : math.max(sessionHigh, high)
@@ -561,12 +566,14 @@ if pendingLong and strategy.position_size <= 0 and (not withinTradeWindow or pen
     pendingLong := false
     pendingTimingBucket := 0
     pendingBar := na
+    plannedEntry := na
 
 if pendingShort and strategy.position_size >= 0 and (not withinTradeWindow or pendingExpired)
     strategy.cancel("S")
     pendingShort := false
     pendingTimingBucket := 0
     pendingBar := na
+    plannedEntry := na
 
 int trailLookback = math.max(5, math.min(20, int(math.floor(structureLookbackBars * 0.5))))
 float trailBaseLow = ta.lowest(low, trailLookback)
@@ -690,6 +697,11 @@ bool shortTrendOK = upContext and overextendedShort and (not requireTrendShift o
 [shortZoneOK, shortDistTicks, shortZoneIdx] = nearest_zone(false, close)
 
 float pointValue = useSymbolPointValue ? syminfo.pointvalue : pointValueOverride
+
+bool visLongSetup = false
+bool visShortSetup = false
+bool visLongOrderSent = false
+bool visShortOrderSent = false
 
 bool canEvaluateEntry = strategy.position_size == 0 and not pendingOrderExists and pendingTimingBucket == 0 and windowGateOK and hasEnoughBars and timeFrameOk and dayOk and tradeSlotsOK and spacingOK and timingGateOK and volatilityGateOK
 
@@ -832,27 +844,47 @@ if canEvaluateEntry
             longPlanReady := false
 
     if longPlanReady
+        visLongSetup := true
         strategy.entry("L", strategy.long, qty = longQty, stop = longEntry, alert_message = build_entry_message("long", longQty, longEntry, longStop, longTarget, timingBucket))
         plannedStop := longStop
         plannedTarget := longTarget
+        plannedEntry := longEntry
         pendingLong := true
         pendingShort := false
         pendingTimingBucket := requireTimingWindow ? timingBucket : 0
         pendingBar := bar_index
+        visLongOrderSent := true
 
     else if shortPlanReady
+        visShortSetup := true
         strategy.entry("S", strategy.short, qty = shortQty, stop = shortEntry, alert_message = build_entry_message("short", shortQty, shortEntry, shortStop, shortTarget, timingBucket))
         plannedStop := shortStop
         plannedTarget := shortTarget
+        plannedEntry := shortEntry
         pendingShort := true
         pendingLong := false
         pendingTimingBucket := requireTimingWindow ? timingBucket : 0
         pendingBar := bar_index
+        visShortOrderSent := true
 
 // -----------------------------
 // Visual aids
 // -----------------------------
+bool rawBullPattern = close > open and close > high[1]
+bool rawBearPattern = close < open and close < low[1]
+
+plot(showPendingEntryLine and pendingOrderExists ? plannedEntry : na, "Pending Entry", color = color.new(color.yellow, 0), linewidth = 2, style = plot.style_linebr)
 plot(strategy.position_size != 0 ? activeStop : na, "Active Stop", color = color.new(color.red, 0), linewidth = 2, style = plot.style_linebr)
 plot(strategy.position_size != 0 ? activeTarget : na, "Active Target", color = color.new(color.green, 0), linewidth = 2, style = plot.style_linebr)
 plot(cashOpenTriggered ? minutesFromOpen : na, "MinutesFromOpen", color = color.new(color.blue, 70), display = display.none)
+
+plotshape(showSignalMarkers and visLongSetup, title = "Long Setup", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small, text = "BUY")
+plotshape(showSignalMarkers and visShortSetup, title = "Short Setup", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small, text = "SELL")
+plotshape(showSignalMarkers and visLongOrderSent, title = "Long Order Sent", style = shape.labelup, location = location.belowbar, color = color.new(color.green, 0), textcolor = color.white, size = size.tiny, text = "L STOP")
+plotshape(showSignalMarkers and visShortOrderSent, title = "Short Order Sent", style = shape.labeldown, location = location.abovebar, color = color.new(color.maroon, 0), textcolor = color.white, size = size.tiny, text = "S STOP")
+plotshape(showSignalMarkers and newLongFill, title = "Long Filled", style = shape.labelup, location = location.belowbar, color = color.new(color.teal, 0), textcolor = color.white, size = size.tiny, text = "LONG FILLED")
+plotshape(showSignalMarkers and newShortFill, title = "Short Filled", style = shape.labeldown, location = location.abovebar, color = color.new(color.orange, 0), textcolor = color.white, size = size.tiny, text = "SHORT FILLED")
+
+plotshape(showRawPatternMarkers and rawBullPattern, title = "Raw Bull Pattern", style = shape.circle, location = location.belowbar, color = color.new(color.lime, 70), size = size.tiny, text = "B")
+plotshape(showRawPatternMarkers and rawBearPattern, title = "Raw Bear Pattern", style = shape.circle, location = location.abovebar, color = color.new(color.red, 70), size = size.tiny, text = "S")
 
