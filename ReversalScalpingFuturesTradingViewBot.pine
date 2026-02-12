@@ -33,7 +33,7 @@ cashOpenMinute = input.int(30, "CashOpenMinute", minval = 0, maxval = 59, group 
 cashOpenTimeZone = input.string("America/New_York", "CashOpenTimeZone", group = groupSession)
 sessionOpenOffsetMinutes = input.int(930, "SessionOpenOffsetMinutes", minval = 0, maxval = 1440, group = groupSession)
 tradeWindowMinutesAfterOpen = input.int(60, "TradeWindowMinutesAfterOpen", minval = 1, maxval = 240, group = groupSession)
-maxTradesPerSession = input.int(2, "MaxTradesPerSession", minval = 1, maxval = 10, group = groupSession)
+maxTradesPerSession = input.int(6, "MaxTradesPerSession", minval = 1, maxval = 20, group = groupSession)
 oneTradePerTimingWindow = input.bool(false, "OneTradePerTimingWindow", group = groupSession)
 entryExpiryBars = input.int(3, "EntryExpiryBars", minval = 1, maxval = 20, group = groupSession)
 requireOneMinuteChart = input.bool(false, "Require1MinuteChart", group = groupSession)
@@ -106,7 +106,7 @@ stopMethod = input.string("SwingExtreme", "StopMethod", options = ["SwingExtreme
 stopBufferTicks = input.int(2, "StopBufferTicks", minval = 0, maxval = 20, group = groupStops)
 fixedStopTicks = input.int(20, "FixedStopTicks", minval = 1, maxval = 100, group = groupStops)
 maxStopTicks = input.int(40, "MaxStopTicks", minval = 1, maxval = 200, group = groupStops)
-targetR = input.float(2.0, "TargetR", minval = 0.5, maxval = 10.0, group = groupStops)
+targetR = input.float(0.9, "TargetR", minval = 0.3, maxval = 10.0, group = groupStops)
 useZoneTargets = input.bool(false, "UseZoneTargets", group = groupStops)
 
 // -----------------------------
@@ -114,7 +114,7 @@ useZoneTargets = input.bool(false, "UseZoneTargets", group = groupStops)
 // -----------------------------
 const string groupMgmt = "Management"
 moveToBreakEvenEnabled = input.bool(true, "MoveToBreakEvenEnabled", group = groupMgmt)
-breakEvenTriggerR = input.float(2.0, "BreakEvenTriggerR", minval = 0.5, maxval = 10.0, group = groupMgmt)
+breakEvenTriggerR = input.float(0.7, "BreakEvenTriggerR", minval = 0.2, maxval = 10.0, group = groupMgmt)
 breakEvenPlusTicks = input.int(0, "BreakEvenPlusTicks", minval = 0, maxval = 10, group = groupMgmt)
 scaleOutEnabled = input.bool(false, "ScaleOutEnabled", group = groupMgmt)
 scaleOutPercent = input.int(50, "ScaleOutPercent", minval = 1, maxval = 99, group = groupMgmt)
@@ -148,12 +148,16 @@ requireVolatilityGate = input.bool(false, "RequireVolatilityGate", group = group
 enableFallbackPattern = input.bool(true, "EnableFallbackPattern", group = groupExec)
 enforceMaxStopFilter = input.bool(false, "EnforceMaxStopFilter", group = groupExec)
 forceMinQtyWhenRiskTooSmall = input.bool(true, "ForceMinQtyWhenRiskTooSmall", group = groupExec)
-minBarsBetweenEntries = input.int(3, "MinBarsBetweenEntries", minval = 0, maxval = 100, group = groupExec)
+minBarsBetweenEntries = input.int(1, "MinBarsBetweenEntries", minval = 0, maxval = 100, group = groupExec)
 showSignalMarkers = input.bool(true, "ShowSignalMarkers", group = groupExec)
 showRawPatternMarkers = input.bool(false, "ShowRawPatternMarkers", group = groupExec)
 showPendingEntryLine = input.bool(true, "ShowPendingEntryLine", group = groupExec)
 showSetupMarkers = input.bool(false, "ShowSetupMarkers", group = groupExec)
 entryExecutionMode = input.string("Market", "EntryExecutionMode", options = ["Market", "StopMarket"], group = groupExec)
+highWinScalpMode = input.bool(true, "HighWinScalpMode", group = groupExec)
+highWinTargetR = input.float(0.75, "HighWinTargetR", minval = 0.3, maxval = 3.0, group = groupExec)
+maxBarsInTradeScalp = input.int(16, "MaxBarsInTradeScalp", minval = 1, maxval = 300, group = groupExec)
+fastExitOnOppositeCandle = input.bool(true, "FastExitOnOppositeCandle", group = groupExec)
 
 // -----------------------------
 // Constants / state
@@ -209,6 +213,7 @@ var bool scaleOutDone = false
 var int positionEntryTs = na
 var int lastFillBar = na
 var float plannedEntry = na
+var int positionEntryBar = na
 
 // -----------------------------
 // Helpers
@@ -546,6 +551,7 @@ if newLongFill or newShortFill
     breakEvenMoved := false
     scaleOutDone := false
     positionEntryTs := time
+    positionEntryBar := bar_index
 
     activeStop := plannedStop
     activeTarget := plannedTarget
@@ -559,10 +565,14 @@ if justFlat
     breakEvenMoved := false
     scaleOutDone := false
     positionEntryTs := na
+    positionEntryBar := na
 
 bool pendingOrderExists = pendingLong or pendingShort
 bool pendingExpired = pendingOrderExists and not na(pendingBar) and (bar_index - pendingBar >= entryExpiryBars)
 bool stopModeNow = entryExecutionMode == "StopMarket"
+float effectiveTargetR = highWinScalpMode ? math.min(targetR, highWinTargetR) : targetR
+float effectiveBreakEvenR = highWinScalpMode ? math.min(breakEvenTriggerR, math.max(0.25, effectiveTargetR * 0.7)) : breakEvenTriggerR
+int barsInTrade = not na(positionEntryBar) ? (bar_index - positionEntryBar) : 0
 
 if pendingLong and strategy.position_size <= 0 and (not withinTradeWindow or pendingExpired)
     strategy.cancel("L")
@@ -596,10 +606,16 @@ if strategy.position_size > 0
 
     float currentR = (close - strategy.position_avg_price) / initialRiskPoints
 
+    if highWinScalpMode and barsInTrade >= maxBarsInTradeScalp
+        strategy.close("L", comment = "SCALP_TIME_LONG", alert_message = build_exit_message("long", "scalp_time"))
+
+    if highWinScalpMode and fastExitOnOppositeCandle and close < open and close < low[1]
+        strategy.close("L", comment = "SCALP_REV_LONG", alert_message = build_exit_message("long", "scalp_reversal"))
+
     if maxHoldMinutes > 0 and not na(positionEntryTs) and time >= positionEntryTs + maxHoldMinutes * 60000
         strategy.close("L", comment = "TIME_EXIT_LONG", alert_message = build_exit_message("long", "time"))
 
-    if moveToBreakEvenEnabled and not breakEvenMoved and currentR >= breakEvenTriggerR
+    if moveToBreakEvenEnabled and not breakEvenMoved and currentR >= effectiveBreakEvenR
         float beStop = strategy.position_avg_price + breakEvenPlusTicks * syminfo.mintick
         beStop := math.min(beStop, close - syminfo.mintick)
         activeStop := na(activeStop) ? beStop : math.max(activeStop, beStop)
@@ -622,10 +638,16 @@ if strategy.position_size < 0
 
     float currentR = (strategy.position_avg_price - close) / initialRiskPoints
 
+    if highWinScalpMode and barsInTrade >= maxBarsInTradeScalp
+        strategy.close("S", comment = "SCALP_TIME_SHORT", alert_message = build_exit_message("short", "scalp_time"))
+
+    if highWinScalpMode and fastExitOnOppositeCandle and close > open and close > high[1]
+        strategy.close("S", comment = "SCALP_REV_SHORT", alert_message = build_exit_message("short", "scalp_reversal"))
+
     if maxHoldMinutes > 0 and not na(positionEntryTs) and time >= positionEntryTs + maxHoldMinutes * 60000
         strategy.close("S", comment = "TIME_EXIT_SHORT", alert_message = build_exit_message("short", "time"))
 
-    if moveToBreakEvenEnabled and not breakEvenMoved and currentR >= breakEvenTriggerR
+    if moveToBreakEvenEnabled and not breakEvenMoved and currentR >= effectiveBreakEvenR
         float beStop = strategy.position_avg_price - breakEvenPlusTicks * syminfo.mintick
         beStop := math.max(beStop, close + syminfo.mintick)
         activeStop := na(activeStop) ? beStop : math.min(activeStop, beStop)
@@ -777,7 +799,7 @@ if canEvaluateEntry
         if longStop < longExecRef and longStopFilterPass
             longQty := calc_contracts(longExecRef, longStop, pointValue)
             if longQty > 0
-                float rrTarget = longExecRef + (longExecRef - longStop) * targetR
+                float rrTarget = longExecRef + (longExecRef - longStop) * effectiveTargetR
                 if useZoneTargets
                     float zoneTarget = find_zone_target(true, longExecRef)
                     rrTarget := na(zoneTarget) ? rrTarget : math.min(rrTarget, zoneTarget)
@@ -840,7 +862,7 @@ if canEvaluateEntry
         if shortStop > shortExecRef and shortStopFilterPass
             shortQty := calc_contracts(shortExecRef, shortStop, pointValue)
             if shortQty > 0
-                float rrTarget = shortExecRef - (shortStop - shortExecRef) * targetR
+                float rrTarget = shortExecRef - (shortStop - shortExecRef) * effectiveTargetR
                 if useZoneTargets
                     float zoneTarget = find_zone_target(false, shortExecRef)
                     rrTarget := na(zoneTarget) ? rrTarget : math.max(rrTarget, zoneTarget)
