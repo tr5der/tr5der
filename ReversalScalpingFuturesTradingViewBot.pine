@@ -36,7 +36,7 @@ tradeWindowMinutesAfterOpen = input.int(60, "TradeWindowMinutesAfterOpen", minva
 maxTradesPerSession = input.int(1, "MaxTradesPerSession", minval = 1, maxval = 10, group = groupSession)
 oneTradePerTimingWindow = input.bool(false, "OneTradePerTimingWindow", group = groupSession)
 entryExpiryBars = input.int(3, "EntryExpiryBars", minval = 1, maxval = 20, group = groupSession)
-requireOneMinuteChart = input.bool(true, "Require1MinuteChart", group = groupSession)
+requireOneMinuteChart = input.bool(false, "Require1MinuteChart", group = groupSession)
 
 allowMonday = input.bool(true, "Trade Monday", group = groupSession)
 allowTuesday = input.bool(true, "Trade Tuesday", group = groupSession)
@@ -150,8 +150,9 @@ enforceMaxStopFilter = input.bool(false, "EnforceMaxStopFilter", group = groupEx
 forceMinQtyWhenRiskTooSmall = input.bool(true, "ForceMinQtyWhenRiskTooSmall", group = groupExec)
 minBarsBetweenEntries = input.int(3, "MinBarsBetweenEntries", minval = 0, maxval = 100, group = groupExec)
 showSignalMarkers = input.bool(true, "ShowSignalMarkers", group = groupExec)
-showRawPatternMarkers = input.bool(true, "ShowRawPatternMarkers", group = groupExec)
+showRawPatternMarkers = input.bool(false, "ShowRawPatternMarkers", group = groupExec)
 showPendingEntryLine = input.bool(true, "ShowPendingEntryLine", group = groupExec)
+entryExecutionMode = input.string("Market", "EntryExecutionMode", options = ["Market", "StopMarket"], group = groupExec)
 
 // -----------------------------
 // Constants / state
@@ -702,6 +703,7 @@ bool visLongSetup = false
 bool visShortSetup = false
 bool visLongOrderSent = false
 bool visShortOrderSent = false
+bool useStopEntryMode = entryExecutionMode == "StopMarket"
 
 bool canEvaluateEntry = strategy.position_size == 0 and not pendingOrderExists and pendingTimingBucket == 0 and windowGateOK and hasEnoughBars and timeFrameOk and dayOk and tradeSlotsOK and spacingOK and timingGateOK and volatilityGateOK
 
@@ -758,21 +760,22 @@ if canEvaluateEntry
 
     if longZonePass and longTrendPass and longSignal and longSignalStrengthOK
         longEntry := round_to_tick(longTrigger + entryOffsetTicks * syminfo.mintick)
+        float longExecRef = useStopEntryMode ? longEntry : round_to_tick(close)
         int swingLookback = math.max(6, math.min(30, structureLookbackBars))
-        float stopRawLong = stopMethod == "FixedTicks" ? (longEntry - fixedStopTicks * syminfo.mintick) : stopMethod == "SignalBar" ? (longAnchor - stopBufferTicks * syminfo.mintick) : (math.min(longAnchor, ta.lowest(low, swingLookback)) - stopBufferTicks * syminfo.mintick)
+        float stopRawLong = stopMethod == "FixedTicks" ? (longExecRef - fixedStopTicks * syminfo.mintick) : stopMethod == "SignalBar" ? (longAnchor - stopBufferTicks * syminfo.mintick) : (math.min(longAnchor, ta.lowest(low, swingLookback)) - stopBufferTicks * syminfo.mintick)
         longStop := round_to_tick(stopRawLong)
-        float stopTicksLong = (longEntry - longStop) / syminfo.mintick
+        float stopTicksLong = (longExecRef - longStop) / syminfo.mintick
 
         bool longStopFilterPass = stopTicksLong > 0 and (not enforceMaxStopFilter or stopTicksLong <= maxStopTicks)
-        if longStop < longEntry and longStopFilterPass
-            longQty := calc_contracts(longEntry, longStop, pointValue)
+        if longStop < longExecRef and longStopFilterPass
+            longQty := calc_contracts(longExecRef, longStop, pointValue)
             if longQty > 0
-                float rrTarget = longEntry + (longEntry - longStop) * targetR
+                float rrTarget = longExecRef + (longExecRef - longStop) * targetR
                 if useZoneTargets
-                    float zoneTarget = find_zone_target(true, longEntry)
+                    float zoneTarget = find_zone_target(true, longExecRef)
                     rrTarget := na(zoneTarget) ? rrTarget : math.min(rrTarget, zoneTarget)
                 longTarget := round_to_tick(rrTarget)
-                longPlanReady := longTarget > longEntry + syminfo.mintick
+                longPlanReady := longTarget > longExecRef + syminfo.mintick
 
     // ---- Short pattern stack ----
     bool shortSignal = false
@@ -820,21 +823,22 @@ if canEvaluateEntry
 
     if shortZonePass and shortTrendPass and shortSignal and shortSignalStrengthOK
         shortEntry := round_to_tick(shortTrigger - entryOffsetTicks * syminfo.mintick)
+        float shortExecRef = useStopEntryMode ? shortEntry : round_to_tick(close)
         int swingLookback = math.max(6, math.min(30, structureLookbackBars))
-        float stopRawShort = stopMethod == "FixedTicks" ? (shortEntry + fixedStopTicks * syminfo.mintick) : stopMethod == "SignalBar" ? (shortAnchor + stopBufferTicks * syminfo.mintick) : (math.max(shortAnchor, ta.highest(high, swingLookback)) + stopBufferTicks * syminfo.mintick)
+        float stopRawShort = stopMethod == "FixedTicks" ? (shortExecRef + fixedStopTicks * syminfo.mintick) : stopMethod == "SignalBar" ? (shortAnchor + stopBufferTicks * syminfo.mintick) : (math.max(shortAnchor, ta.highest(high, swingLookback)) + stopBufferTicks * syminfo.mintick)
         shortStop := round_to_tick(stopRawShort)
-        float stopTicksShort = (shortStop - shortEntry) / syminfo.mintick
+        float stopTicksShort = (shortStop - shortExecRef) / syminfo.mintick
 
         bool shortStopFilterPass = stopTicksShort > 0 and (not enforceMaxStopFilter or stopTicksShort <= maxStopTicks)
-        if shortStop > shortEntry and shortStopFilterPass
-            shortQty := calc_contracts(shortEntry, shortStop, pointValue)
+        if shortStop > shortExecRef and shortStopFilterPass
+            shortQty := calc_contracts(shortExecRef, shortStop, pointValue)
             if shortQty > 0
-                float rrTarget = shortEntry - (shortStop - shortEntry) * targetR
+                float rrTarget = shortExecRef - (shortStop - shortExecRef) * targetR
                 if useZoneTargets
-                    float zoneTarget = find_zone_target(false, shortEntry)
+                    float zoneTarget = find_zone_target(false, shortExecRef)
                     rrTarget := na(zoneTarget) ? rrTarget : math.max(rrTarget, zoneTarget)
                 shortTarget := round_to_tick(rrTarget)
-                shortPlanReady := shortTarget < shortEntry - syminfo.mintick
+                shortPlanReady := shortTarget < shortExecRef - syminfo.mintick
 
     // If both plans are valid, prefer the side closer to its zone.
     if longPlanReady and shortPlanReady
@@ -845,26 +849,32 @@ if canEvaluateEntry
 
     if longPlanReady
         visLongSetup := true
-        strategy.entry("L", strategy.long, qty = longQty, stop = longEntry, alert_message = build_entry_message("long", longQty, longEntry, longStop, longTarget, timingBucket))
+        if useStopEntryMode
+            strategy.entry("L", strategy.long, qty = longQty, stop = longEntry, alert_message = build_entry_message("long", longQty, longEntry, longStop, longTarget, timingBucket))
+        else
+            strategy.entry("L", strategy.long, qty = longQty, alert_message = build_entry_message("long", longQty, close, longStop, longTarget, timingBucket))
         plannedStop := longStop
         plannedTarget := longTarget
-        plannedEntry := longEntry
-        pendingLong := true
+        plannedEntry := useStopEntryMode ? longEntry : close
+        pendingLong := useStopEntryMode
         pendingShort := false
-        pendingTimingBucket := requireTimingWindow ? timingBucket : 0
-        pendingBar := bar_index
+        pendingTimingBucket := timingBucket
+        pendingBar := useStopEntryMode ? bar_index : na
         visLongOrderSent := true
 
     else if shortPlanReady
         visShortSetup := true
-        strategy.entry("S", strategy.short, qty = shortQty, stop = shortEntry, alert_message = build_entry_message("short", shortQty, shortEntry, shortStop, shortTarget, timingBucket))
+        if useStopEntryMode
+            strategy.entry("S", strategy.short, qty = shortQty, stop = shortEntry, alert_message = build_entry_message("short", shortQty, shortEntry, shortStop, shortTarget, timingBucket))
+        else
+            strategy.entry("S", strategy.short, qty = shortQty, alert_message = build_entry_message("short", shortQty, close, shortStop, shortTarget, timingBucket))
         plannedStop := shortStop
         plannedTarget := shortTarget
-        plannedEntry := shortEntry
-        pendingShort := true
+        plannedEntry := useStopEntryMode ? shortEntry : close
+        pendingShort := useStopEntryMode
         pendingLong := false
-        pendingTimingBucket := requireTimingWindow ? timingBucket : 0
-        pendingBar := bar_index
+        pendingTimingBucket := timingBucket
+        pendingBar := useStopEntryMode ? bar_index : na
         visShortOrderSent := true
 
 // -----------------------------
