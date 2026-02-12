@@ -1,0 +1,263 @@
+//@version=5
+strategy("Stupid Simple FVG Strategy", overlay=true, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.04)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+fvgMinTicks = input.int(5, "Minimum FVG Size (ticks)", minval=1, group="FVG Settings")
+useBreakEven = input.bool(true, "Use Break Even", group="Risk Management")
+riskRewardRatio = input.float(1.0, "Risk:Reward Ratio", minval=0.5, maxval=3.0, step=0.1, group="Risk Management")
+riskPercent = input.float(1.0, "Risk % Per Trade", minval=0.1, maxval=5.0, step=0.1, group="Risk Management")
+
+// Session filter
+useSessionFilter = input.bool(true, "Use Session Filter", group="Filters")
+sessionStart = input.string("09:30", "Session Start (NY Time)", group="Filters")
+sessionEnd = input.string("16:00", "Session End (NY Time)", group="Filters")
+sessionDays = input.string("23456", "Session Days (1=Sun ... 7=Sat)", group="Filters")
+
+// Visual options
+showHTFFVG = input.bool(true, "Show HTF FVG", group="Visual")
+show5MinFVG = input.bool(true, "Show 5-Min FVG", group="Visual")
+showInversion = input.bool(true, "Show Inversion", group="Visual")
+
+// ============================================================================
+// FUNCTIONS
+// ============================================================================
+
+// Fair Value Gap Detection Function
+isBullishFVG(high1, low1, high2, low2, high3, low3) =>
+    gap = low1 - high3
+    gap > 0 and gap >= fvgMinTicks * syminfo.mintick
+
+isBearishFVG(high1, low1, high2, low2, high3, low3) =>
+    gap = low3 - high1
+    gap > 0 and gap >= fvgMinTicks * syminfo.mintick
+
+// Session filter function
+inSession() =>
+    if not useSessionFilter
+        true
+    else
+        // Pine sessions must be HHMM-HHMM:days (no ":" inside HHMM time sections).
+        startHHMM = str.replace_all(sessionStart, ":", "")
+        endHHMM = str.replace_all(sessionEnd, ":", "")
+        safeStart = str.length(startHHMM) == 4 ? startHHMM : "0930"
+        safeEnd = str.length(endHHMM) == 4 ? endHHMM : "1600"
+        safeDays = str.length(sessionDays) > 0 ? sessionDays : "23456"
+        t = time(timeframe.period, safeStart + "-" + safeEnd + ":" + safeDays, "America/New_York")
+        not na(t)
+
+// ============================================================================
+// REQUEST HIGHER TIMEFRAME DATA
+// ============================================================================
+
+// 1-Hour Data
+[h1_open, h1_high, h1_low, h1_close] = request.security(syminfo.tickerid, "60", [open, high, low, close], lookahead=barmerge.lookahead_off)
+[h1_high_1, h1_low_1] = request.security(syminfo.tickerid, "60", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[h1_high_2, h1_low_2] = request.security(syminfo.tickerid, "60", [high[2], low[2]], lookahead=barmerge.lookahead_off)
+
+// 4-Hour Data
+[h4_open, h4_high, h4_low, h4_close] = request.security(syminfo.tickerid, "240", [open, high, low, close], lookahead=barmerge.lookahead_off)
+[h4_high_1, h4_low_1] = request.security(syminfo.tickerid, "240", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[h4_high_2, h4_low_2] = request.security(syminfo.tickerid, "240", [high[2], low[2]], lookahead=barmerge.lookahead_off)
+
+// 5-Minute Data
+[m5_open, m5_high, m5_low, m5_close] = request.security(syminfo.tickerid, "5", [open, high, low, close], lookahead=barmerge.lookahead_off)
+[m5_high_1, m5_low_1] = request.security(syminfo.tickerid, "5", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[m5_high_2, m5_low_2] = request.security(syminfo.tickerid, "5", [high[2], low[2]], lookahead=barmerge.lookahead_off)
+
+// ============================================================================
+// DETECT HTF FVGs (1H and 4H)
+// ============================================================================
+
+// 1H FVGs
+h1_bullFVG = isBullishFVG(h1_high, h1_low, h1_high_1, h1_low_1, h1_high_2, h1_low_2)
+h1_bearFVG = isBearishFVG(h1_high, h1_low, h1_high_1, h1_low_1, h1_high_2, h1_low_2)
+
+// 4H FVGs
+h4_bullFVG = isBullishFVG(h4_high, h4_low, h4_high_1, h4_low_1, h4_high_2, h4_low_2)
+h4_bearFVG = isBearishFVG(h4_high, h4_low, h4_high_1, h4_low_1, h4_high_2, h4_low_2)
+
+// Store HTF FVG levels
+var float htf_bull_top = na
+var float htf_bull_bottom = na
+var float htf_bear_top = na
+var float htf_bear_bottom = na
+var bool htf_bull_active = false
+var bool htf_bear_active = false
+
+// Update HTF bullish FVG
+if h1_bullFVG or h4_bullFVG
+    htf_bull_bottom := h1_bullFVG ? h1_high_2 : h4_high_2
+    htf_bull_top := h1_bullFVG ? h1_low : h4_low
+    htf_bull_active := true
+
+// Update HTF bearish FVG
+if h1_bearFVG or h4_bearFVG
+    htf_bear_top := h1_bearFVG ? h1_low_2 : h4_low_2
+    htf_bear_bottom := h1_bearFVG ? h1_high : h4_high
+    htf_bear_active := true
+
+// Check if HTF FVG is filled (invalidate it)
+if htf_bull_active and low <= htf_bull_bottom
+    htf_bull_active := false
+
+if htf_bear_active and high >= htf_bear_top
+    htf_bear_active := false
+
+// ============================================================================
+// DETECT 5-MINUTE FVGs
+// ============================================================================
+
+m5_bullFVG = isBullishFVG(m5_high, m5_low, m5_high_1, m5_low_1, m5_high_2, m5_low_2)
+m5_bearFVG = isBearishFVG(m5_high, m5_low, m5_high_1, m5_low_1, m5_high_2, m5_low_2)
+
+// Store 5-min FVG levels
+var float m5_bull_top = na
+var float m5_bull_bottom = na
+var float m5_bear_top = na
+var float m5_bear_bottom = na
+var bool m5_bull_active = false
+var bool m5_bear_active = false
+var bool htf_bull_touched = false
+var bool htf_bear_touched = false
+
+// Check if price is in HTF FVG
+priceInHTFBullFVG = htf_bull_active and low <= htf_bull_top and high >= htf_bull_bottom
+priceInHTFBearFVG = htf_bear_active and low <= htf_bear_top and high >= htf_bear_bottom
+
+// Mark HTF as touched
+if priceInHTFBullFVG
+    htf_bull_touched := true
+
+if priceInHTFBearFVG
+    htf_bear_touched := true
+
+// Create 5-min FVG after HTF is touched
+if htf_bull_touched and m5_bullFVG
+    m5_bull_bottom := m5_high_2
+    m5_bull_top := m5_low
+    m5_bull_active := true
+
+if htf_bear_touched and m5_bearFVG
+    m5_bear_top := m5_low_2
+    m5_bear_bottom := m5_high
+    m5_bear_active := true
+
+// Check if 5-min FVG is filled
+var bool m5_bull_touched = false
+var bool m5_bear_touched = false
+
+if m5_bull_active and low <= m5_bull_top and high >= m5_bull_bottom
+    m5_bull_touched := true
+
+if m5_bear_active and low <= m5_bear_top and high >= m5_bear_bottom
+    m5_bear_touched := true
+
+// ============================================================================
+// DETECT INVERSIONS (1-MINUTE)
+// ============================================================================
+
+// Current timeframe inversions (works best on 1-min chart)
+curr_bullFVG = isBullishFVG(high, low, high[1], low[1], high[2], low[2])
+curr_bearFVG = isBearishFVG(high, low, high[1], low[1], high[2], low[2])
+
+// ============================================================================
+// ENTRY CONDITIONS
+// ============================================================================
+
+// Long Setup: HTF bull FVG touched -> 5-min bull FVG touched -> bearish-to-bullish inversion
+longCondition = htf_bull_touched and m5_bull_touched and curr_bullFVG and strategy.position_size == 0 and inSession()
+
+// Short Setup: HTF bear FVG touched -> 5-min bear FVG touched -> bullish-to-bearish inversion
+shortCondition = htf_bear_touched and m5_bear_touched and curr_bearFVG and strategy.position_size == 0 and inSession()
+
+// ============================================================================
+// CALCULATE STOPS AND TARGETS
+// ============================================================================
+
+var float entryPrice = na
+var float stopLoss = na
+var float takeProfit = na
+var float breakEvenLevel = na
+var float swingLevel = na
+
+if longCondition
+    entryPrice := close
+    // Stop loss at swing low that went into 5-min FVG
+    stopLoss := low[1] - 2 * syminfo.mintick  // Small buffer
+    swingLevel := high[1]  // Internal high for break even
+
+    // Calculate position size based on risk
+    riskAmount = strategy.equity * (riskPercent / 100)
+    stopDistance = entryPrice - stopLoss
+    takeProfit := entryPrice + (stopDistance * riskRewardRatio)
+    breakEvenLevel := swingLevel
+
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=stopLoss, limit=takeProfit)
+
+    // Reset flags
+    htf_bull_touched := false
+    m5_bull_touched := false
+    m5_bull_active := false
+
+if shortCondition
+    entryPrice := close
+    // Stop loss at swing high that went into 5-min FVG
+    stopLoss := high[1] + 2 * syminfo.mintick  // Small buffer
+    swingLevel := low[1]  // Internal low for break even
+
+    // Calculate position size based on risk
+    riskAmount = strategy.equity * (riskPercent / 100)
+    stopDistance = stopLoss - entryPrice
+    takeProfit := entryPrice - (stopDistance * riskRewardRatio)
+    breakEvenLevel := swingLevel
+
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=stopLoss, limit=takeProfit)
+
+    // Reset flags
+    htf_bear_touched := false
+    m5_bear_touched := false
+    m5_bear_active := false
+
+// ============================================================================
+// BREAK EVEN LOGIC
+// ============================================================================
+
+if useBreakEven and strategy.position_size > 0
+    if high >= breakEvenLevel
+        strategy.exit("Long Exit", "Long", stop=entryPrice, limit=takeProfit)
+
+if useBreakEven and strategy.position_size < 0
+    if low <= breakEvenLevel
+        strategy.exit("Short Exit", "Short", stop=entryPrice, limit=takeProfit)
+
+// ============================================================================
+// PLOTTING
+// ============================================================================
+
+// Plot HTF FVG zones
+bgcolor(showHTFFVG and htf_bull_active ? color.new(color.green, 95) : na, title="HTF Bull FVG")
+bgcolor(showHTFFVG and htf_bear_active ? color.new(color.red, 95) : na, title="HTF Bear FVG")
+
+// Plot 5-min FVG zones
+bgcolor(show5MinFVG and m5_bull_active ? color.new(color.blue, 90) : na, title="5M Bull FVG")
+bgcolor(show5MinFVG and m5_bear_active ? color.new(color.orange, 90) : na, title="5M Bear FVG")
+
+// Plot entry signals
+plotshape(longCondition, "Long Signal", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(shortCondition, "Short Signal", shape.triangledown, location.abovebar, color.red, size=size.small)
+
+// Plot stop loss and take profit levels
+plot(strategy.position_size != 0 ? stopLoss : na, "Stop Loss", color.red, 2, plot.style_linebr)
+plot(strategy.position_size != 0 ? takeProfit : na, "Take Profit", color.green, 2, plot.style_linebr)
+plot(strategy.position_size != 0 ? breakEvenLevel : na, "Break Even Level", color.yellow, 1, plot.style_linebr)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+alertcondition(longCondition, "Long Entry", "FVG Long Setup Confirmed")
+alertcondition(shortCondition, "Short Entry", "FVG Short Setup Confirmed")
