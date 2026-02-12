@@ -352,14 +352,6 @@ active_timing_bucket(float elapsedMinutes) =>
 timing_bucket_used(int bucket) =>
     bucket == 15 ? usedTiming15 : bucket == 30 ? usedTiming30 : bucket == 90 ? usedTiming90 : false
 
-mark_timing_bucket_used(int bucket) =>
-    if bucket == 15
-        usedTiming15 := true
-    else if bucket == 30
-        usedTiming30 := true
-    else if bucket == 90
-        usedTiming90 := true
-
 calc_contracts(float entryPx, float stopPx, float pointValue) =>
     int maxC = math.max(1, maxContracts)
     int minC = math.max(1, minContracts)
@@ -500,7 +492,12 @@ bool justFlat = strategy.position_size == 0 and strategy.position_size[1] != 0
 
 if newLongFill or newShortFill
     tradesThisSessionWindow += 1
-    mark_timing_bucket_used(pendingTimingBucket)
+    if pendingTimingBucket == 15
+        usedTiming15 := true
+    else if pendingTimingBucket == 30
+        usedTiming30 := true
+    else if pendingTimingBucket == 90
+        usedTiming90 := true
     pendingTimingBucket := 0
     pendingLong := false
     pendingShort := false
