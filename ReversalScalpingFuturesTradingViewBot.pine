@@ -137,6 +137,20 @@ useSymbolPointValue = input.bool(true, "UseSymbolPointValue", group = groupRisk)
 pointValueOverride = input.float(50.0, "PointValueOverride", minval = 0.01, group = groupRisk)
 
 // -----------------------------
+// Inputs: Execution mode (trade frequency controls)
+// -----------------------------
+const string groupExec = "Execution"
+enforceTradeWindow = input.bool(false, "EnforceTradeWindowAfterOpen", group = groupExec)
+requireTimingWindow = input.bool(false, "RequireTimingWindow", group = groupExec)
+requireZoneGate = input.bool(false, "RequireZoneGate", group = groupExec)
+requireTrendGate = input.bool(false, "RequireTrendGate", group = groupExec)
+requireVolatilityGate = input.bool(false, "RequireVolatilityGate", group = groupExec)
+enableFallbackPattern = input.bool(true, "EnableFallbackPattern", group = groupExec)
+enforceMaxStopFilter = input.bool(false, "EnforceMaxStopFilter", group = groupExec)
+forceMinQtyWhenRiskTooSmall = input.bool(true, "ForceMinQtyWhenRiskTooSmall", group = groupExec)
+minBarsBetweenEntries = input.int(3, "MinBarsBetweenEntries", minval = 0, maxval = 100, group = groupExec)
+
+// -----------------------------
 // Constants / state
 // -----------------------------
 int BIAS_SUPPORT = 1
@@ -188,6 +202,7 @@ var float initialRiskPoints = na
 var bool breakEvenMoved = false
 var bool scaleOutDone = false
 var int positionEntryTs = na
+var int lastFillBar = na
 
 // -----------------------------
 // Helpers
@@ -371,7 +386,7 @@ calc_contracts(float entryPx, float stopPx, float pointValue) =>
         else
             int c = int(math.floor(riskPerTradeDollars / riskPerContract))
             c := math.min(maxC, c)
-            c < minC ? 0 : c
+            c < minC ? (forceMinQtyWhenRiskTooSmall ? minC : 0) : c
 
 build_entry_message(string side, int qty, float entryPx, float stopPx, float targetPx, int bucket) =>
     "{" +
@@ -528,6 +543,7 @@ if newLongFill or newShortFill
     activeStop := plannedStop
     activeTarget := plannedTarget
     initialRiskPoints := math.max(syminfo.mintick, math.abs(strategy.position_avg_price - activeStop))
+    lastFillBar := bar_index
 
 if justFlat
     activeStop := na
@@ -642,6 +658,10 @@ int timingBucket = not na(minutesFromOpen) ? active_timing_bucket(minutesFromOpe
 bool timingOK = timingBucket != 0
 bool timingAvailable = not oneTradePerTimingWindow or not timing_bucket_used(timingBucket)
 bool tradeSlotsOK = tradesThisSessionWindow < maxTradesPerSession
+bool spacingOK = na(lastFillBar) or (bar_index - lastFillBar >= minBarsBetweenEntries)
+bool windowGateOK = enforceTradeWindow ? withinTradeWindow : true
+bool timingGateOK = requireTimingWindow ? (timingOK and timingAvailable) : true
+bool volatilityGateOK = requireVolatilityGate ? volatilityOK : true
 
 float pl = ta.pivotlow(low, 2, 2)
 float ph = ta.pivothigh(high, 2, 2)
@@ -671,7 +691,7 @@ bool shortTrendOK = upContext and overextendedShort and (not requireTrendShift o
 
 float pointValue = useSymbolPointValue ? syminfo.pointvalue : pointValueOverride
 
-bool canEvaluateEntry = strategy.position_size == 0 and not pendingOrderExists and pendingTimingBucket == 0 and withinTradeWindow and hasEnoughBars and timeFrameOk and dayOk and tradeSlotsOK and timingOK and timingAvailable and volatilityOK
+bool canEvaluateEntry = strategy.position_size == 0 and not pendingOrderExists and pendingTimingBucket == 0 and windowGateOK and hasEnoughBars and timeFrameOk and dayOk and tradeSlotsOK and spacingOK and timingGateOK and volatilityGateOK
 
 if canEvaluateEntry
     // ---- Long pattern stack ----
@@ -686,6 +706,7 @@ if canEvaluateEntry
     bool bullEngulf = close > open and close[1] < open[1] and open <= close[1] and close >= open[1] and strong_body(0)
     bool bullTLS = bar_index >= 4 and close[3] < open[3] and close[2] < open[2] and close[1] < open[1] and close[2] < close[3] and close[1] < close[2] and close > open and open <= close[1] and close >= open[3] and strong_body(0)
     bool bullFlushFlip = bar_index >= 3 and close[2] < open[2] and strong_body(2) and close[1] > open[1] and close > open and strong_body(1) and strong_body(0) and close > high[2]
+    bool bullFallback = close > open and close > high[1]
 
     if enableHigherLowBreak and higherLowBreak
         longSignal := true
@@ -708,8 +729,14 @@ if canEvaluateEntry
         longSignal := true
         longTrigger := high
         longAnchor := math.min(math.min(low, low[1]), low[2])
+    else if enableFallbackPattern and bullFallback
+        longSignal := true
+        longTrigger := high
+        longAnchor := low
 
     bool longSignalStrengthOK = not requireEngulfingOrStrongClose or longEngulfingSignal or strong_body(0) or (close > open and close >= high[1])
+    bool longZonePass = not requireZoneGate or longZoneOK
+    bool longTrendPass = not requireTrendGate or longTrendOK
 
     bool longPlanReady = false
     int longQty = 0
@@ -717,14 +744,15 @@ if canEvaluateEntry
     float longStop = na
     float longTarget = na
 
-    if longZoneOK and longTrendOK and longSignal and longSignalStrengthOK
+    if longZonePass and longTrendPass and longSignal and longSignalStrengthOK
         longEntry := round_to_tick(longTrigger + entryOffsetTicks * syminfo.mintick)
         int swingLookback = math.max(6, math.min(30, structureLookbackBars))
         float stopRawLong = stopMethod == "FixedTicks" ? (longEntry - fixedStopTicks * syminfo.mintick) : stopMethod == "SignalBar" ? (longAnchor - stopBufferTicks * syminfo.mintick) : (math.min(longAnchor, ta.lowest(low, swingLookback)) - stopBufferTicks * syminfo.mintick)
         longStop := round_to_tick(stopRawLong)
         float stopTicksLong = (longEntry - longStop) / syminfo.mintick
 
-        if longStop < longEntry and stopTicksLong > 0 and stopTicksLong <= maxStopTicks
+        bool longStopFilterPass = stopTicksLong > 0 and (not enforceMaxStopFilter or stopTicksLong <= maxStopTicks)
+        if longStop < longEntry and longStopFilterPass
             longQty := calc_contracts(longEntry, longStop, pointValue)
             if longQty > 0
                 float rrTarget = longEntry + (longEntry - longStop) * targetR
@@ -744,6 +772,7 @@ if canEvaluateEntry
     bool bearEngulf = close < open and close[1] > open[1] and open >= close[1] and close <= open[1] and strong_body(0)
     bool bearTLS = bar_index >= 4 and close[3] > open[3] and close[2] > open[2] and close[1] > open[1] and close[2] > close[3] and close[1] > close[2] and close < open and open >= close[1] and close <= open[3] and strong_body(0)
     bool bearFlushFlip = bar_index >= 3 and close[2] > open[2] and strong_body(2) and close[1] < open[1] and close < open and strong_body(1) and strong_body(0) and close < low[2]
+    bool bearFallback = close < open and close < low[1]
 
     if enableHeadAndShoulders and lowerHighBreak
         shortSignal := true
@@ -762,8 +791,14 @@ if canEvaluateEntry
         shortSignal := true
         shortTrigger := low
         shortAnchor := math.max(math.max(high, high[1]), high[2])
+    else if enableFallbackPattern and bearFallback
+        shortSignal := true
+        shortTrigger := low
+        shortAnchor := high
 
     bool shortSignalStrengthOK = not requireEngulfingOrStrongClose or shortEngulfingSignal or strong_body(0) or (close < open and close <= low[1])
+    bool shortZonePass = not requireZoneGate or shortZoneOK
+    bool shortTrendPass = not requireTrendGate or shortTrendOK
 
     bool shortPlanReady = false
     int shortQty = 0
@@ -771,14 +806,15 @@ if canEvaluateEntry
     float shortStop = na
     float shortTarget = na
 
-    if shortZoneOK and shortTrendOK and shortSignal and shortSignalStrengthOK
+    if shortZonePass and shortTrendPass and shortSignal and shortSignalStrengthOK
         shortEntry := round_to_tick(shortTrigger - entryOffsetTicks * syminfo.mintick)
         int swingLookback = math.max(6, math.min(30, structureLookbackBars))
         float stopRawShort = stopMethod == "FixedTicks" ? (shortEntry + fixedStopTicks * syminfo.mintick) : stopMethod == "SignalBar" ? (shortAnchor + stopBufferTicks * syminfo.mintick) : (math.max(shortAnchor, ta.highest(high, swingLookback)) + stopBufferTicks * syminfo.mintick)
         shortStop := round_to_tick(stopRawShort)
         float stopTicksShort = (shortStop - shortEntry) / syminfo.mintick
 
-        if shortStop > shortEntry and stopTicksShort > 0 and stopTicksShort <= maxStopTicks
+        bool shortStopFilterPass = stopTicksShort > 0 and (not enforceMaxStopFilter or stopTicksShort <= maxStopTicks)
+        if shortStop > shortEntry and shortStopFilterPass
             shortQty := calc_contracts(shortEntry, shortStop, pointValue)
             if shortQty > 0
                 float rrTarget = shortEntry - (shortStop - shortEntry) * targetR
@@ -801,7 +837,7 @@ if canEvaluateEntry
         plannedTarget := longTarget
         pendingLong := true
         pendingShort := false
-        pendingTimingBucket := timingBucket
+        pendingTimingBucket := requireTimingWindow ? timingBucket : 0
         pendingBar := bar_index
 
     else if shortPlanReady
@@ -810,7 +846,7 @@ if canEvaluateEntry
         plannedTarget := shortTarget
         pendingShort := true
         pendingLong := false
-        pendingTimingBucket := timingBucket
+        pendingTimingBucket := requireTimingWindow ? timingBucket : 0
         pendingBar := bar_index
 
 // -----------------------------
