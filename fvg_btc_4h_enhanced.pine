@@ -1,0 +1,539 @@
+//@version=5
+strategy(
+     "FVG BTC - 4H Enhanced",
+     overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.fixed,
+     default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract,
+     commission_value=5.00,
+     slippage=2,
+     pyramiding=1,
+     max_bars_back=700)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+instrumentType = input.string("BTC", "Instrument", options=["MNQ", "MES", "BTC"], group="01. Instrument")
+
+// FVG structure
+fvgMinTicks     = input.int(5, "Min FVG Size (ticks)", minval=2, maxval=15, group="02. FVG")
+htfTimeframe    = input.string("D", "HTF", options=["D", "W"], group="02. FVG")
+confTimeframe   = input.string("240", "Confirm TF", options=["120", "240"], group="02. FVG")
+maxFVGAge       = input.int(30, "Max HTF FVG Age (bars)", minval=10, maxval=80, group="02. FVG")
+maxRetests      = input.int(3, "Max HTF Retests", minval=1, maxval=8, group="02. FVG")
+confExpiry      = input.int(24, "Confirm FVG Lifetime", minval=8, maxval=60, group="02. FVG")
+confirmWindow   = input.int(8, "Bars Allowed After HTF Touch", minval=2, maxval=20, group="02. FVG")
+entryWindow     = input.int(3, "Bars Allowed After Confirm Touch", minval=1, maxval=10, group="02. FVG")
+zoneBreakFrac   = input.float(0.40, "Zone Break Invalidation Factor", minval=0.1, maxval=1.0, step=0.05, group="02. FVG")
+
+// BTC risk model
+useAtrStopsBTC  = input.bool(true, "BTC: Use ATR-Based Stops/Targets", group="03. BTC Risk")
+btc_slPct       = input.float(1.1, "BTC Stop Loss % (if ATR off)", minval=0.5, maxval=3.0, step=0.1, group="03. BTC Risk")
+btc_tpPct       = input.float(3.2, "BTC Take Profit % (if ATR off)", minval=1.0, maxval=8.0, step=0.1, group="03. BTC Risk")
+btc_trPct       = input.float(0.6, "BTC Trailing % (if ATR off)", minval=0.2, maxval=2.0, step=0.1, group="03. BTC Risk")
+btcAtrSLMult    = input.float(1.35, "BTC ATR Stop Mult", minval=0.6, maxval=3.0, step=0.05, group="03. BTC Risk")
+btcAtrTPMult    = input.float(3.00, "BTC ATR Target Mult", minval=1.2, maxval=6.0, step=0.1, group="03. BTC Risk")
+btcAtrTrailMult = input.float(1.00, "BTC ATR Trail Mult", minval=0.4, maxval=3.0, step=0.05, group="03. BTC Risk")
+beR             = input.float(0.85, "Break-Even Trigger (R)", minval=0.3, maxval=2.0, step=0.05, group="03. BTC Risk")
+partR           = input.float(1.20, "Partial Trigger (R)", minval=0.5, maxval=3.0, step=0.1, group="03. BTC Risk")
+usePartial      = input.bool(true, "Take 50% Partial", group="03. BTC Risk")
+useTrailing     = input.bool(true, "Use Trailing After BE", group="03. BTC Risk")
+
+// MNQ/MES fallback
+mnq_sl = input.int(35, "MNQ SL ticks", minval=15, maxval=120, group="04. NQ/ES Risk")
+mnq_tp = input.int(90, "MNQ TP ticks", minval=40, maxval=260, group="04. NQ/ES Risk")
+mes_sl = input.int(28, "MES SL ticks", minval=12, maxval=90, group="04. NQ/ES Risk")
+mes_tp = input.int(70, "MES TP ticks", minval=30, maxval=220, group="04. NQ/ES Risk")
+
+// Trade controls
+maxTradesPerDay = input.int(2, "Max Entries Per Day", minval=1, maxval=8, group="05. Trade Controls")
+cooldownBars    = input.int(6, "Cooldown Bars After Losing Trade", minval=0, maxval=48, group="05. Trade Controls")
+
+// Quality filters
+useTrend        = input.bool(true, "EMA Trend Filter", group="06. Quality Filters")
+emaFast         = input.int(21, "Fast EMA", minval=8, maxval=60, group="06. Quality Filters")
+emaSlow         = input.int(55, "Slow EMA", minval=20, maxval=120, group="06. Quality Filters")
+emaLong         = input.int(200, "Trend Bias EMA", minval=100, maxval=300, group="06. Quality Filters")
+
+useADX          = input.bool(true, "ADX Trend Strength Filter", group="06. Quality Filters")
+adxLen          = input.int(14, "ADX Length", minval=7, maxval=30, group="06. Quality Filters")
+adxMin          = input.float(18.0, "ADX Minimum", minval=10.0, maxval=40.0, step=0.5, group="06. Quality Filters")
+
+useATRFilter    = input.bool(true, "ATR Volatility Filter", group="06. Quality Filters")
+atrLen          = input.int(14, "ATR Length", minval=5, maxval=30, group="06. Quality Filters")
+atrBaseLen      = input.int(20, "ATR MA Length", minval=8, maxval=50, group="06. Quality Filters")
+atrMultMin      = input.float(0.7, "ATR Min x ATR-MA", minval=0.2, maxval=1.8, step=0.05, group="06. Quality Filters")
+
+useRSI          = input.bool(true, "RSI Filter", group="06. Quality Filters")
+rsiLen          = input.int(14, "RSI Length", minval=7, maxval=30, group="06. Quality Filters")
+rsiBullMin      = input.int(42, "RSI Long Min", minval=30, maxval=60, group="06. Quality Filters")
+rsiBearMax      = input.int(58, "RSI Short Max", minval=40, maxval=70, group="06. Quality Filters")
+rsiOB           = input.int(75, "RSI OB Cutoff", minval=60, maxval=90, group="06. Quality Filters")
+rsiOS           = input.int(25, "RSI OS Cutoff", minval=10, maxval=40, group="06. Quality Filters")
+
+useVol          = input.bool(true, "Volume Filter", group="06. Quality Filters")
+volLen          = input.int(20, "Volume MA", minval=8, maxval=60, group="06. Quality Filters")
+volMinX         = input.float(0.7, "Volume Min x MA", minval=0.3, maxval=2.0, step=0.05, group="06. Quality Filters")
+
+useCandleFilter = input.bool(true, "Candle Body Filter", group="06. Quality Filters")
+minBodyPct      = input.float(0.35, "Min Body % of Candle", minval=0.1, maxval=0.8, step=0.05, group="06. Quality Filters")
+
+useBreakFilter  = input.bool(false, "Breakout Confirmation Filter", group="06. Quality Filters")
+breakLookback   = input.int(8, "Breakout Lookback", minval=3, maxval=30, group="06. Quality Filters")
+
+tradeLongs      = input.bool(true, "Trade Longs", group="07. Direction")
+tradeShorts     = input.bool(true, "Trade Shorts", group="07. Direction")
+
+showHTFFVG      = input.bool(true, "Show HTF Zones", group="08. Visual")
+showCfFVG       = input.bool(true, "Show Confirm Zones", group="08. Visual")
+showEMAs        = input.bool(true, "Show EMAs", group="08. Visual")
+showTable       = input.bool(true, "Show Table", group="08. Visual")
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+isBullFVG(h1, l1, h2, l2, h3, l3) =>
+    gap = l1 - h3
+    gap > 0 and gap >= fvgMinTicks * syminfo.mintick
+
+isBearFVG(h1, l1, h2, l2, h3, l3) =>
+    gap = l3 - h1
+    gap > 0 and gap >= fvgMinTicks * syminfo.mintick
+
+// ============================================================================
+// INDICATORS
+// ============================================================================
+
+ema_f = ta.ema(close, emaFast)
+ema_s = ta.ema(close, emaSlow)
+ema_l = ta.ema(close, emaLong)
+
+bullTrend = useTrend ? (ema_f > ema_s and close > ema_l and close > ema_f) : true
+bearTrend = useTrend ? (ema_f < ema_s and close < ema_l and close < ema_f) : true
+
+adxVal  = ta.adx(adxLen)
+goodADX = useADX ? adxVal >= adxMin : true
+
+atrVal   = ta.atr(atrLen)
+atrBase  = ta.sma(atrVal, atrBaseLen)
+goodATR  = useATRFilter ? atrVal > atrBase * atrMultMin : true
+
+rsiVal   = ta.rsi(close, rsiLen)
+bullRSI  = useRSI ? (rsiVal > rsiBullMin and rsiVal < rsiOB) : true
+bearRSI  = useRSI ? (rsiVal < rsiBearMax and rsiVal > rsiOS) : true
+
+volMA    = ta.sma(volume, volLen)
+goodVol  = useVol ? volume > volMA * volMinX : true
+
+candleRange = high - low
+candleBody  = math.abs(close - open)
+goodCandle  = useCandleFilter ? (candleRange > 0 ? candleBody / candleRange >= minBodyPct : false) : true
+bullCandle  = close > open
+bearCandle  = close < open
+
+bullBreak   = useBreakFilter ? close > ta.highest(high, breakLookback)[1] : true
+bearBreak   = useBreakFilter ? close < ta.lowest(low, breakLookback)[1] : true
+
+dataReady = not na(ema_l) and not na(atrBase) and not na(volMA)
+
+// ============================================================================
+// HIGHER TIMEFRAME FVG (NON-REPAINT: USE CLOSED HTF BARS)
+// ============================================================================
+
+htf_h0 = request.security(syminfo.tickerid, htfTimeframe, high[1], lookahead=barmerge.lookahead_off)
+htf_l0 = request.security(syminfo.tickerid, htfTimeframe, low[1], lookahead=barmerge.lookahead_off)
+htf_h1 = request.security(syminfo.tickerid, htfTimeframe, high[2], lookahead=barmerge.lookahead_off)
+htf_l1 = request.security(syminfo.tickerid, htfTimeframe, low[2], lookahead=barmerge.lookahead_off)
+htf_h2 = request.security(syminfo.tickerid, htfTimeframe, high[3], lookahead=barmerge.lookahead_off)
+htf_l2 = request.security(syminfo.tickerid, htfTimeframe, low[3], lookahead=barmerge.lookahead_off)
+
+htfBullFVG = isBullFVG(htf_h0, htf_l0, htf_h1, htf_l1, htf_h2, htf_l2)
+htfBearFVG = isBearFVG(htf_h0, htf_l0, htf_h1, htf_l1, htf_h2, htf_l2)
+
+var float htf_bull_top  = na
+var float htf_bull_bot  = na
+var float htf_bear_top  = na
+var float htf_bear_bot  = na
+var bool  htf_bull_on   = false
+var bool  htf_bear_on   = false
+var int   htf_bull_bar  = 0
+var int   htf_bear_bar  = 0
+var int   htf_bull_hits = 0
+var int   htf_bear_hits = 0
+var int   htfBullTouchBar = na
+var int   htfBearTouchBar = na
+var bool  htfBullInsidePrev = false
+var bool  htfBearInsidePrev = false
+
+if htfBullFVG
+    htf_bull_bot  := htf_h2
+    htf_bull_top  := htf_l0
+    htf_bull_on   := true
+    htf_bull_bar  := bar_index
+    htf_bull_hits := 0
+    htfBullTouchBar := na
+
+if htfBearFVG
+    htf_bear_top  := htf_l2
+    htf_bear_bot  := htf_h0
+    htf_bear_on   := true
+    htf_bear_bar  := bar_index
+    htf_bear_hits := 0
+    htfBearTouchBar := na
+
+if htf_bull_on and bar_index - htf_bull_bar > maxFVGAge
+    htf_bull_on := false
+    htfBullTouchBar := na
+if htf_bear_on and bar_index - htf_bear_bar > maxFVGAge
+    htf_bear_on := false
+    htfBearTouchBar := na
+
+htfBullHeight = not na(htf_bull_top) and not na(htf_bull_bot) ? htf_bull_top - htf_bull_bot : 0.0
+htfBearHeight = not na(htf_bear_top) and not na(htf_bear_bot) ? htf_bear_top - htf_bear_bot : 0.0
+
+if htf_bull_on and close < htf_bull_bot - htfBullHeight * zoneBreakFrac
+    htf_bull_on := false
+    htfBullTouchBar := na
+if htf_bear_on and close > htf_bear_top + htfBearHeight * zoneBreakFrac
+    htf_bear_on := false
+    htfBearTouchBar := na
+
+inHTFBull = htf_bull_on and low <= htf_bull_top and high >= htf_bull_bot
+inHTFBear = htf_bear_on and low <= htf_bear_top and high >= htf_bear_bot
+
+newHTFBullTouch = inHTFBull and not htfBullInsidePrev
+newHTFBearTouch = inHTFBear and not htfBearInsidePrev
+
+if newHTFBullTouch
+    htf_bull_hits += 1
+    htfBullTouchBar := bar_index
+if newHTFBearTouch
+    htf_bear_hits += 1
+    htfBearTouchBar := bar_index
+
+htfBullInsidePrev := inHTFBull
+htfBearInsidePrev := inHTFBear
+
+// ============================================================================
+// CONFIRMATION TIMEFRAME FVG (NON-REPAINT: USE CLOSED CONF BARS)
+// ============================================================================
+
+cf_h0 = request.security(syminfo.tickerid, confTimeframe, high[1], lookahead=barmerge.lookahead_off)
+cf_l0 = request.security(syminfo.tickerid, confTimeframe, low[1], lookahead=barmerge.lookahead_off)
+cf_h1 = request.security(syminfo.tickerid, confTimeframe, high[2], lookahead=barmerge.lookahead_off)
+cf_l1 = request.security(syminfo.tickerid, confTimeframe, low[2], lookahead=barmerge.lookahead_off)
+cf_h2 = request.security(syminfo.tickerid, confTimeframe, high[3], lookahead=barmerge.lookahead_off)
+cf_l2 = request.security(syminfo.tickerid, confTimeframe, low[3], lookahead=barmerge.lookahead_off)
+
+cfBullFVG = isBullFVG(cf_h0, cf_l0, cf_h1, cf_l1, cf_h2, cf_l2)
+cfBearFVG = isBearFVG(cf_h0, cf_l0, cf_h1, cf_l1, cf_h2, cf_l2)
+
+var float cf_bull_top = na
+var float cf_bull_bot = na
+var float cf_bear_top = na
+var float cf_bear_bot = na
+var bool  cf_bull_on  = false
+var bool  cf_bear_on  = false
+var int   cf_bull_bar = 0
+var int   cf_bear_bar = 0
+var int   cfBullTouchBar = na
+var int   cfBearTouchBar = na
+var bool  cfBullInsidePrev = false
+var bool  cfBearInsidePrev = false
+
+bullTouchWindowOk = htf_bull_on and not na(htfBullTouchBar) and (bar_index - htfBullTouchBar <= confirmWindow) and (htf_bull_hits <= maxRetests)
+bearTouchWindowOk = htf_bear_on and not na(htfBearTouchBar) and (bar_index - htfBearTouchBar <= confirmWindow) and (htf_bear_hits <= maxRetests)
+
+if bullTouchWindowOk and cfBullFVG
+    cf_bull_bot := cf_h2
+    cf_bull_top := cf_l0
+    cf_bull_on  := true
+    cf_bull_bar := bar_index
+    cfBullTouchBar := na
+
+if bearTouchWindowOk and cfBearFVG
+    cf_bear_top := cf_l2
+    cf_bear_bot := cf_h0
+    cf_bear_on  := true
+    cf_bear_bar := bar_index
+    cfBearTouchBar := na
+
+if cf_bull_on and bar_index - cf_bull_bar > confExpiry
+    cf_bull_on := false
+    cfBullTouchBar := na
+if cf_bear_on and bar_index - cf_bear_bar > confExpiry
+    cf_bear_on := false
+    cfBearTouchBar := na
+
+inCfBull = cf_bull_on and low <= cf_bull_top and high >= cf_bull_bot
+inCfBear = cf_bear_on and low <= cf_bear_top and high >= cf_bear_bot
+
+cfBullTouch = inCfBull and not cfBullInsidePrev
+cfBearTouch = inCfBear and not cfBearInsidePrev
+
+if cfBullTouch
+    cfBullTouchBar := bar_index
+if cfBearTouch
+    cfBearTouchBar := bar_index
+
+cfBullInsidePrev := inCfBull
+cfBearInsidePrev := inCfBear
+
+cfBullEntryReady = cf_bull_on and not na(cfBullTouchBar) and (bar_index - cfBullTouchBar <= entryWindow)
+cfBearEntryReady = cf_bear_on and not na(cfBearTouchBar) and (bar_index - cfBearTouchBar <= entryWindow)
+
+// ============================================================================
+// CURRENT TIMEFRAME FVG
+// ============================================================================
+
+currBullFVG = isBullFVG(high, low, high[1], low[1], high[2], low[2])
+currBearFVG = isBearFVG(high, low, high[1], low[1], high[2], low[2])
+
+// ============================================================================
+// TRADE CONTROLS
+// ============================================================================
+
+var int tradesToday = 0
+var int cooldownUntilBar = 0
+var int seenClosedTrades = 0
+
+newDay = ta.change(time("D")) != 0
+if newDay
+    tradesToday := 0
+
+if strategy.closedtrades > seenClosedTrades
+    lastTradeIdx = strategy.closedtrades - 1
+    tradePnl = strategy.closedtrades.profit(lastTradeIdx)
+    if tradePnl < 0
+        cooldownUntilBar := bar_index + cooldownBars
+    seenClosedTrades := strategy.closedtrades
+
+cooldownOk = bar_index >= cooldownUntilBar
+tradesOk   = tradesToday < maxTradesPerDay
+
+// ============================================================================
+// ENTRY CONDITIONS
+// ============================================================================
+
+longCond =
+     tradeLongs and
+     dataReady and
+     strategy.position_size == 0 and
+     htf_bull_on and cf_bull_on and
+     bullTouchWindowOk and
+     cfBullEntryReady and currBullFVG and
+     bullTrend and bullRSI and
+     goodADX and goodATR and goodVol and
+     goodCandle and bullCandle and bullBreak and
+     cooldownOk and tradesOk
+
+shortCond =
+     tradeShorts and
+     dataReady and
+     strategy.position_size == 0 and
+     htf_bear_on and cf_bear_on and
+     bearTouchWindowOk and
+     cfBearEntryReady and currBearFVG and
+     bearTrend and bearRSI and
+     goodADX and goodATR and goodVol and
+     goodCandle and bearCandle and bearBreak and
+     cooldownOk and tradesOk
+
+// ============================================================================
+// POSITION MANAGEMENT
+// ============================================================================
+
+var float entryPx = na
+var float slPx    = na
+var float tpPx    = na
+var float partPx  = na
+var float beTrig  = na
+var float trailPx = na
+var float trailAmt = na
+var float riskDist = na
+var bool  beSet    = false
+var bool  partDone = false
+
+slDistNow =
+    instrumentType == "BTC" ?
+    (useAtrStopsBTC ? atrVal * btcAtrSLMult : close * (btc_slPct / 100.0)) :
+    (instrumentType == "MNQ" ? mnq_sl * syminfo.mintick : mes_sl * syminfo.mintick)
+
+tpDistNow =
+    instrumentType == "BTC" ?
+    (useAtrStopsBTC ? atrVal * btcAtrTPMult : close * (btc_tpPct / 100.0)) :
+    (instrumentType == "MNQ" ? mnq_tp * syminfo.mintick : mes_tp * syminfo.mintick)
+
+trailDistNow =
+    instrumentType == "BTC" ?
+    (useAtrStopsBTC ? atrVal * btcAtrTrailMult : close * (btc_trPct / 100.0)) :
+    slDistNow * 0.45
+
+if longCond
+    entryPx   := close
+    riskDist  := slDistNow
+    slPx      := close - slDistNow
+    tpPx      := close + tpDistNow
+    partPx    := close + slDistNow * partR
+    beTrig    := close + slDistNow * beR
+    trailAmt  := trailDistNow
+    beSet     := false
+    partDone  := false
+    trailPx   := na
+    tradesToday += 1
+    strategy.entry("Long", strategy.long, qty=1)
+    cf_bull_on := false
+
+if shortCond
+    entryPx   := close
+    riskDist  := slDistNow
+    slPx      := close + slDistNow
+    tpPx      := close - tpDistNow
+    partPx    := close - slDistNow * partR
+    beTrig    := close - slDistNow * beR
+    trailAmt  := trailDistNow
+    beSet     := false
+    partDone  := false
+    trailPx   := na
+    tradesToday += 1
+    strategy.entry("Short", strategy.short, qty=1)
+    cf_bear_on := false
+
+// ============================================================================
+// EXIT MANAGEMENT
+// ============================================================================
+
+if strategy.position_size > 0
+    if usePartial and not partDone and high >= partPx
+        strategy.close("Long", qty_percent=50, comment="1/2 TP")
+        partDone := true
+
+    if not beSet and high >= beTrig
+        beSet := true
+        trailPx := entryPx
+
+    if beSet and useTrailing
+        newTrail = high - trailAmt
+        trailPx := na(trailPx) ? newTrail : math.max(trailPx, newTrail)
+        strategy.exit("L-EX", "Long", stop=trailPx, limit=tpPx)
+    else if beSet
+        strategy.exit("L-EX", "Long", stop=entryPx, limit=tpPx)
+    else
+        strategy.exit("L-EX", "Long", stop=slPx, limit=tpPx)
+
+if strategy.position_size < 0
+    if usePartial and not partDone and low <= partPx
+        strategy.close("Short", qty_percent=50, comment="1/2 TP")
+        partDone := true
+
+    if not beSet and low <= beTrig
+        beSet := true
+        trailPx := entryPx
+
+    if beSet and useTrailing
+        newTrail = low + trailAmt
+        trailPx := na(trailPx) ? newTrail : math.min(trailPx, newTrail)
+        strategy.exit("S-EX", "Short", stop=trailPx, limit=tpPx)
+    else if beSet
+        strategy.exit("S-EX", "Short", stop=entryPx, limit=tpPx)
+    else
+        strategy.exit("S-EX", "Short", stop=slPx, limit=tpPx)
+
+// ============================================================================
+// VISUALS
+// ============================================================================
+
+bgcolor(showHTFFVG and htf_bull_on ? color.new(color.green, 93) : na)
+bgcolor(showHTFFVG and htf_bear_on ? color.new(color.red, 93) : na)
+bgcolor(showCfFVG and cf_bull_on ? color.new(color.aqua, 88) : na)
+bgcolor(showCfFVG and cf_bear_on ? color.new(color.orange, 88) : na)
+
+plot(showEMAs ? ema_f : na, title="EMA Fast", color=color.new(color.blue, 15), linewidth=2)
+plot(showEMAs ? ema_s : na, title="EMA Slow", color=color.new(color.red, 15), linewidth=2)
+plot(showEMAs ? ema_l : na, title="EMA Long", color=color.new(color.yellow, 45), linewidth=1)
+
+plotshape(longCond, title="Long Signal", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.tiny, text="L")
+plotshape(shortCond, title="Short Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.tiny, text="S")
+
+plot(strategy.position_size != 0 ? slPx : na, title="SL", color=color.red, linewidth=2, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? tpPx : na, title="TP", color=color.green, linewidth=2, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? partPx : na, title="Partial", color=color.yellow, linewidth=1, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? entryPx : na, title="Entry", color=color.white, linewidth=1, style=plot.style_linebr)
+plot(strategy.position_size != 0 and not na(trailPx) ? trailPx : na, title="Trail", color=color.purple, linewidth=2, style=plot.style_linebr)
+
+// ============================================================================
+// STATUS TABLE
+// ============================================================================
+
+if showTable and barstate.islast
+    var table t = table.new(position.top_right, 2, 18, bgcolor=color.new(color.black, 85), border_width=1)
+
+    table.cell(t, 0, 0, "FVG 4H ENHANCED", text_color=color.white, bgcolor=color.new(color.blue, 55))
+    table.cell(t, 1, 0, instrumentType, text_color=color.yellow, bgcolor=color.new(color.blue, 55))
+
+    posText = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT"
+    posCol  = strategy.position_size > 0 ? color.lime : strategy.position_size < 0 ? color.red : color.gray
+    table.cell(t, 0, 1, "Position", text_color=color.white)
+    table.cell(t, 1, 1, posText, text_color=posCol)
+
+    htfText = htf_bull_on ? "BULL" : htf_bear_on ? "BEAR" : "NONE"
+    htfCol  = htf_bull_on ? color.lime : htf_bear_on ? color.red : color.gray
+    table.cell(t, 0, 2, "HTF FVG", text_color=color.white)
+    table.cell(t, 1, 2, htfText, text_color=htfCol)
+
+    cfText = cf_bull_on ? "BULL" : cf_bear_on ? "BEAR" : "NONE"
+    cfCol  = cf_bull_on ? color.lime : cf_bear_on ? color.red : color.gray
+    table.cell(t, 0, 3, "Conf FVG", text_color=color.white)
+    table.cell(t, 1, 3, cfText, text_color=cfCol)
+
+    trendText = bullTrend ? "BULL" : bearTrend ? "BEAR" : "NEUTRAL"
+    trendCol  = bullTrend ? color.lime : bearTrend ? color.red : color.gray
+    table.cell(t, 0, 4, "Trend", text_color=color.white)
+    table.cell(t, 1, 4, trendText, text_color=trendCol)
+
+    table.cell(t, 0, 5, "RSI", text_color=color.white)
+    table.cell(t, 1, 5, str.tostring(math.round(rsiVal, 1)), text_color=color.yellow)
+
+    table.cell(t, 0, 6, "ADX", text_color=color.white)
+    table.cell(t, 1, 6, str.tostring(math.round(adxVal, 1)), text_color=goodADX ? color.lime : color.red)
+
+    table.cell(t, 0, 7, "ATR Filter", text_color=color.white)
+    table.cell(t, 1, 7, goodATR ? "OK" : "LOW", text_color=goodATR ? color.lime : color.red)
+
+    table.cell(t, 0, 8, "Volume", text_color=color.white)
+    table.cell(t, 1, 8, goodVol ? "OK" : "LOW", text_color=goodVol ? color.lime : color.red)
+
+    table.cell(t, 0, 9, "Candle", text_color=color.white)
+    table.cell(t, 1, 9, goodCandle ? "OK" : "WEAK", text_color=goodCandle ? color.lime : color.red)
+
+    table.cell(t, 0, 10, "Retests", text_color=color.white)
+    table.cell(t, 1, 10, str.tostring(math.max(htf_bull_hits, htf_bear_hits)) + "/" + str.tostring(maxRetests), text_color=color.yellow)
+
+    table.cell(t, 0, 11, "Trades Today", text_color=color.white)
+    table.cell(t, 1, 11, str.tostring(tradesToday) + "/" + str.tostring(maxTradesPerDay), text_color=color.orange)
+
+    coolText = cooldownOk ? "NO" : "YES"
+    coolCol  = cooldownOk ? color.gray : color.red
+    table.cell(t, 0, 12, "Cooldown", text_color=color.white)
+    table.cell(t, 1, 12, coolText, text_color=coolCol)
+
+    rrNow = not na(entryPx) and not na(slPx) and not na(tpPx) and math.abs(entryPx - slPx) > 0 ?
+        math.round(math.abs(tpPx - entryPx) / math.abs(entryPx - slPx), 2) : na
+    table.cell(t, 0, 13, "Current R:R", text_color=color.white)
+    table.cell(t, 1, 13, na(rrNow) ? "-" : str.tostring(rrNow) + ":1", text_color=color.yellow)
+
+    table.cell(t, 0, 14, "BE Active", text_color=color.white)
+    table.cell(t, 1, 14, beSet ? "YES" : "NO", text_color=beSet ? color.lime : color.gray)
+
+    table.cell(t, 0, 15, "ATR Stop Mode", text_color=color.white)
+    table.cell(t, 1, 15, useAtrStopsBTC ? "ON" : "OFF", text_color=useAtrStopsBTC ? color.lime : color.gray)
+
+    table.cell(t, 0, 16, "Net P/L", text_color=color.white)
+    np = strategy.netprofit
+    table.cell(t, 1, 16, "$" + str.tostring(math.round(np, 2)), text_color=np >= 0 ? color.lime : color.red)
+
+    table.cell(t, 0, 17, "PF", text_color=color.white)
+    table.cell(t, 1, 17, str.tostring(math.round(strategy.grossprofit / math.max(math.abs(strategy.grossloss), 1), 2)), text_color=color.aqua)
